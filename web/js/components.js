@@ -4,7 +4,7 @@ import {
   sb, state, q, rpc, toast, toastErr, NOTIFY, NOTIFY_CLS, FILL_STATUS, ORDER_STATUS, ACTION_LABEL, CIRCLED,
   parseRocInput, rocOf, fullOf, weekOf, addDays, todayISO, diffDays, dtOf, dayOf, fmtNo, onlyDigits, debounce,
   findStaff, askStaff, bridgeSearch, bump, storeSetting, isoOf, parseISO, fillTpl, copyText, shortHosp, ageOf, birthOf, selfOnly,
-  parseBirthInput, birthMatch, isMasked, focusNext, askConfirm, DEFAULT_CANCEL_REASONS,
+  parseBirthInput, birthMatch, isMasked, focusNext, askConfirm, DEFAULT_CANCEL_REASONS, loadStoreData,
 } from './lib.js';
 import { printOrder, getPrintMode, setPrintMode, PRINT_MODES } from './print.js';
 
@@ -947,6 +947,75 @@ export const ConfirmModal = {
         <button ref="okBtn" class="btn" :class="state.confirm.danger ? 'danger-fill' : 'fill'" @click="done(true)">{{state.confirm.okText}}</button>
       </div>
     </div>
+  </div>`,
+};
+
+// ---------------------------------------------------------------- 可拖拉排序的標籤（片語、取消原因、常用科別）
+export const SortableChips = {
+  props: { items: { type: Array, default: () => [] }, label: { type: Function, default: x => x }, prefix: Function, removable: { type: Boolean, default: true } },
+  emits: ['reorder', 'remove'],
+  setup(props, { emit }) {
+    const from = ref(-1);
+    const over = ref(-1);
+    function start(i, e) { from.value = i; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', String(i)); } catch { /* ignore */ } }
+    function enter(i) { if (from.value >= 0) over.value = i; }
+    function drop(i) {
+      const f = from.value;
+      from.value = -1; over.value = -1;
+      if (f < 0 || f === i) return;
+      const a = [...props.items];
+      const [x] = a.splice(f, 1);
+      a.splice(i, 0, x);
+      emit('reorder', a);
+    }
+    function end() { from.value = -1; over.value = -1; }
+    return { from, over, start, enter, drop, end, emit };
+  },
+  template: `<div class="schips">
+    <span v-for="(it,i) in items" :key="i" class="schip" draggable="true" :class="{dragging: from===i, over: over===i && from!==i}"
+      @dragstart="start(i,$event)" @dragenter.prevent="enter(i)" @dragover.prevent @drop.prevent="drop(i)" @dragend="end" title="拖拉可調整順序">
+      <span class="grip">⠿</span><span class="k" v-if="prefix">{{prefix(it)}}</span>{{label(it)}}
+      <button type="button" v-if="removable" class="rm" title="移除" @click="emit('remove', it, i)">✕</button>
+    </span>
+    <span class="small muted" v-if="!items.length">尚未設定</span>
+  </div>`,
+};
+
+// ---------------------------------------------------------------- 片語維護（門市或全域），拖拉排序、即時儲存
+export const PhraseEditor = {
+  components: { SortableChips },
+  props: { storeId: { type: String, default: null } },
+  setup(props) {
+    const rows = ref([]);
+    const text = ref('');
+    const base = () => (props.storeId ? sb.from('rx_phrases').select('*').eq('store_id', props.storeId) : sb.from('rx_phrases').select('*').is('store_id', null));
+    async function load() { try { rows.value = await q(base().order('sort').order('id')); } catch (e) { toastErr(e); } }
+    watch(() => props.storeId, load);
+    onMounted(load);
+    async function add() {
+      const t = text.value.trim();
+      if (!t) return;
+      if (rows.value.some(r => r.text === t)) { toast('已經有這個片語', 'warn'); return; }
+      try {
+        await q(sb.from('rx_phrases').insert({ store_id: props.storeId, text: t, sort: rows.value.length + 1 }));
+        text.value = ''; await load(); loadStoreData();
+      } catch (e) { toastErr(e); }
+    }
+    async function remove(r) {
+      try { await q(sb.from('rx_phrases').delete().eq('id', r.id)); await load(); loadStoreData(); } catch (e) { toastErr(e); }
+    }
+    async function reorder(list) {
+      rows.value = list;
+      try {
+        await Promise.all(list.map((r, i) => q(sb.from('rx_phrases').update({ sort: i + 1 }).eq('id', r.id))));
+        toast('順序已儲存', 'ok', 1200); loadStoreData();
+      } catch (e) { toastErr(e); load(); }
+    }
+    return { rows, text, add, remove, reorder };
+  },
+  template: `<div>
+    <SortableChips :items="rows" :label="r => r.text" @reorder="reorder" @remove="remove" />
+    <div class="inline addrow"><input class="inp" v-model="text" placeholder="輸入新片語後按 Enter" @keydown.enter.prevent="add"><button class="btn sm" @click="add">＋ 新增</button></div>
   </div>`,
 };
 

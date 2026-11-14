@@ -58,7 +58,10 @@ pharmacy-rx/
    ```
 
 ### 1-5 部署帳號管理功能（Edge Function）
-部署後，管理員就能直接在網頁上「新增帳號／重設密碼」。以下兩種方式擇一：
+部署後，管理員就能直接在網頁上新增帳號、修改帳號、重設密碼、停用帳號（做法與調撥系統的 `admin-users` 相同）。
+這支函式只接受公司網址（`*.linyaomedical.com`）和本機（localhost）的呼叫。如果要用 Railway 預設網址（`xxx.up.railway.app`）測試，請到 **Edge Functions → Secrets** 新增 `ALLOWED_ORIGINS`，值填那個網址（例：`https://xxx.up.railway.app`）。
+
+以下兩種方式擇一：
 
 **方式 A：在後台貼上程式碼（最簡單）**
 **Edge Functions → Deploy a new function → Via Editor**，函式名稱填 `rx-admin-users`，貼上 `supabase/functions/rx-admin-users/index.ts` 的內容後按 Deploy。
@@ -66,8 +69,11 @@ pharmacy-rx/
 **方式 B：用 VS Code 終端機**
 ```bash
 npx supabase login
-npx supabase functions deploy rx-admin-users --project-ref 你的專案代碼
+npx supabase functions deploy rx-admin-users --remote=你的專案代碼 --use-api
 ```
+
+> 部署完成後，在後台 **Edge Functions** 清單應該看得到 `rx-admin-users`。
+> 若建立帳號時出現 401（驗證被擋），再加上 `--no-verify-jwt` 重新部署；函式內部本來就會檢查呼叫者是不是管理員，關閉平台驗證不會降低安全性。
 
 ### 1-6 取得連線資訊
 到 **Project Settings → API Keys**，複製以下兩項：

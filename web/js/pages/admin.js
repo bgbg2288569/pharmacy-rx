@@ -1,7 +1,7 @@
 // 系統管理（管理員）：門市、帳號、人員代碼、醫院、科別、全域片語、系統參數
 import { ref, reactive, computed, onMounted } from 'vue';
 import { sb, state, q, toast, toastErr, loadCommon, loadStoreData, debounce } from '../lib.js';
-import { CrudTable, TplInput } from '../components.js';
+import { CrudTable, TplInput, PhraseEditor } from '../components.js';
 
 function parseCsv(text) {
   const rows = []; let row = [], cur = '', inQ = false;
@@ -49,7 +49,7 @@ const CsvImport = {
 };
 
 export default {
-  components: { CrudTable, CsvImport, TplInput },
+  components: { CrudTable, CsvImport, TplInput, PhraseEditor },
   setup() {
     const tab = ref('stores');
     const storeOpts = () => [{ v: null, t: '（未指定）' }, ...state.stores.map(s => ({ v: s.id, t: `${s.id} ${s.name}` }))];
@@ -63,33 +63,69 @@ export default {
     };
     const reloadAll = async () => { await loadCommon(); await loadStoreData(); };
 
-    // 帳號建立（Edge Function：rx-admin-users）
-    const nu = reactive({ account: '', password: '', display_name: '', role: 'store', store_id: '' });
-    const uKey = ref(0);
+    // ---------- 帳號管理（Edge Function：rx-admin-users，做法與調撥系統相同） ----------
+    const nu = reactive({ account: '', password: '', password2: '', display_name: '', role: 'store', store_id: '' });
+    const showPw = ref(false);
+    const users = ref([]);
+    const uBusy = ref(false);
+    const pw = reactive({ open: false, user: null, value: '', value2: '', show: false });
     async function callFn(body) {
       const { data, error } = await sb.functions.invoke('rx-admin-users', { body });
       if (error) {
         let m = error.message || '';
         try { m = (await error.context.json()).error || m; } catch { /* 不是 JSON 回應 */ }
         const status = error.context?.status;
-        if (status === 404) throw new Error('找不到 Edge Function「rx-admin-users」：請確認已部署在同一個 Supabase 專案，且名稱完全相同');
-        if (status === 401) throw new Error('Edge Function 拒絕驗證（401）：請用 --no-verify-jwt 重新部署（函式內已自行檢查管理員身分）');
-        if (/Failed to send/i.test(m)) throw new Error('無法連線到 Edge Function（可能未部署、專案網址不符，或平台 JWT 驗證擋下請求）：' + m);
-        throw new Error(m || '帳號建立失敗');
+        if (status === 404 && !/使用者/.test(m)) throw new Error('找不到 Edge Function「rx-admin-users」：請確認已部署在同一個 Supabase 專案，且名稱完全相同');
+        throw new Error(m || '操作失敗');
       }
       if (data?.error) throw new Error(data.error);
       return data;
     }
+    async function loadUsers() {
+      try {
+        const rows = await q(sb.from('rx_users').select('*').order('role').order('account'));
+        users.value = rows.map(u => ({ ...u, _o: JSON.stringify({ a: u.account, d: u.display_name, r: u.role, s: u.store_id }) }));
+      } catch (e) { toastErr(e); }
+    }
+    const uDirty = u => JSON.stringify({ a: u.account, d: u.display_name, r: u.role, s: u.store_id }) !== u._o;
     async function createUser() {
       if (!nu.account || !nu.password) return toast('請輸入帳號與密碼', 'err');
-      try { await callFn({ action: 'create', ...nu, store_id: nu.store_id || null }); toast('帳號已建立', 'ok'); Object.assign(nu, { account: '', password: '', display_name: '' }); uKey.value++; }
-      catch (e) { toastErr(e); }
+      if (nu.password.length < 6) return toast('密碼至少 6 碼', 'err');
+      if (nu.password !== nu.password2) return toast('兩次輸入的密碼不一致', 'err');
+      if (nu.role === 'store' && !nu.store_id) return toast('門市帳號需要指定門市', 'err');
+      uBusy.value = true;
+      try {
+        const { password2, ...body } = nu;
+        await callFn({ action: 'create', ...body, store_id: nu.store_id || null });
+        toast(`已建立帳號 ${nu.account}`, 'ok');
+        Object.assign(nu, { account: '', password: '', password2: '', display_name: '' }); showPw.value = false;
+        await loadUsers();
+      } catch (e) { toastErr(e); } finally { uBusy.value = false; }
     }
-    async function resetPw() {
-      const account = prompt('要重設密碼的帳號：'); if (!account) return;
-      const password = prompt(`「${account}」的新密碼：`); if (!password) return;
-      try { await callFn({ action: 'reset_password', account, password }); toast('密碼已重設', 'ok'); } catch (e) { toastErr(e); }
+    async function saveUser(u) {
+      uBusy.value = true;
+      try {
+        await callFn({ action: 'update', userId: u.id, account: u.account, display_name: u.display_name, role: u.role, store_id: u.store_id || null });
+        toast('已儲存', 'ok', 1400); await loadUsers();
+      } catch (e) { toastErr(e); } finally { uBusy.value = false; }
     }
+    async function toggleActive(u) {
+      const to = !u.active;
+      if (!to && !confirm(`停用帳號「${u.account}」？停用後無法登入。`)) return;
+      uBusy.value = true;
+      try { await callFn({ action: 'set_active', userId: u.id, active: to }); toast(to ? '已啟用' : '已停用', 'ok'); await loadUsers(); }
+      catch (e) { toastErr(e); } finally { uBusy.value = false; }
+    }
+    function openPw(u) { Object.assign(pw, { open: true, user: u, value: '', value2: '', show: false }); }
+    async function submitPw() {
+      if (!pw.value) return toast('請輸入新密碼', 'err');
+      if (pw.value.length < 6) return toast('密碼至少 6 碼', 'err');
+      if (pw.value !== pw.value2) return toast('兩次輸入的密碼不一致', 'err');
+      uBusy.value = true;
+      try { await callFn({ action: 'reset_password', userId: pw.user.id, password: pw.value }); toast(`已修改 ${pw.user.account} 的密碼`, 'ok'); pw.open = false; }
+      catch (e) { toastErr(e); } finally { uBusy.value = false; }
+    }
+    const storeName = id => state.stores.find(s => s.id === id)?.name || '';
 
     // 系統參數
     const gs = reactive({ notify_template: '', receipt_footer: '', prep_days_ahead: 7 });
@@ -101,9 +137,10 @@ export default {
         await loadCommon(); toast('系統參數已儲存', 'ok');
       } catch (e) { toastErr(e); }
     }
-    onMounted(loadGs);
+    onMounted(() => { loadGs(); loadUsers(); });
 
-    return { state, tab, storeOpts, staffStoreOpts, hq, hKey, setHq, hospQuery, reloadAll, nu, uKey, createUser, resetPw, gs, saveGs };
+    return { state, tab, storeOpts, staffStoreOpts, hq, hKey, setHq, hospQuery, reloadAll, nu, showPw, users, uBusy, pw, uDirty,
+      createUser, saveUser, toggleActive, openPw, submitPw, loadUsers, storeName, gs, saveGs };
   },
   template: `<div class="wrap">
     <div class="page-head"><h2><i class="sl"></i>系統管理</h2></div>
@@ -123,19 +160,52 @@ export default {
       <div class="card">
         <h3><i class="sl"></i>新增帳號</h3>
         <div class="form" style="align-items:end">
-          <div class="fld c2"><label>帳號</label><input class="inp" v-model="nu.account" placeholder="fuyuan"></div>
-          <div class="fld c2"><label>密碼</label><input class="inp" v-model="nu.password"></div>
-          <div class="fld c3"><label>顯示名稱</label><input class="inp" v-model="nu.display_name" placeholder="福原藥局"></div>
-          <div class="fld c2"><label>角色</label><select class="inp" v-model="nu.role"><option value="store">門市</option><option value="admin">管理員</option></select></div>
+          <div class="fld c2"><label>帳號</label><input class="inp" v-model="nu.account" placeholder="fuyuan" autocomplete="off"></div>
+          <div class="fld c2"><label>密碼 <span class="opt">至少 6 碼</span></label>
+            <div class="pwbox"><input class="inp" :type="showPw ? 'text' : 'password'" v-model="nu.password" autocomplete="new-password">
+              <button type="button" class="eye" :title="showPw ? '隱藏' : '顯示'" @click="showPw=!showPw">{{showPw ? '🙈' : '👁'}}</button></div></div>
+          <div class="fld c2"><label>確認密碼</label><input class="inp" :class="{err: nu.password2 && nu.password2!==nu.password}" :type="showPw ? 'text' : 'password'" v-model="nu.password2" autocomplete="new-password"></div>
+          <div class="fld c2"><label>顯示名稱</label><input class="inp" v-model="nu.display_name" placeholder="福原藥局"></div>
+          <div class="fld" style="grid-column:span 1"><label>角色</label><select class="inp" v-model="nu.role"><option value="store">門市</option><option value="admin">管理員</option></select></div>
           <div class="fld c2"><label>門市</label><select class="inp" v-model="nu.store_id"><option value="">（無）</option><option v-for="s in state.stores" :key="s.id" :value="s.id">{{s.name}}</option></select></div>
-          <div class="fld c1" style="grid-column:span 1"><button class="btn fill" @click="createUser">建立</button></div>
+          <div class="fld" style="grid-column:span 1"><button class="btn fill" :disabled="uBusy" @click="createUser">建立</button></div>
         </div>
-        <p class="small muted" style="margin:10px 0 0">門市使用固定共用帳號即可；實際操作人員以「人員代碼」區分。<button class="linkbtn" @click="resetPw">重設某帳號密碼</button></p>
+        <p class="small muted" style="margin:10px 0 0">門市使用固定共用帳號即可；實際操作人員以「人員代碼」區分。登入時輸入帳號即可（系統會自動補上 @rx.linyao.local）。</p>
       </div>
       <div class="card">
-        <CrudTable table="rx_users" :reload-key="uKey" :can-add="false" :can-delete="false" :query="b=>b.order('account')"
-          hint="從 Supabase 後台新增的使用者也會自動出現在這裡，指定角色與門市即可使用。"
-          :cols="[{key:'account',label:'帳號',readonly:true},{key:'display_name',label:'顯示名稱'},{key:'role',label:'角色',type:'select',options:[{v:'store',t:'門市'},{v:'admin',t:'管理員'}],w:'110px'},{key:'store_id',label:'門市',type:'select',options:storeOpts,w:'180px'},{key:'active',label:'啟用',type:'bool',w:'60px'}]" />
+        <div class="btns" style="margin-bottom:8px"><h3 style="margin:0"><i class="sl"></i>帳號清單</h3><span style="flex:1"></span>
+          <button class="btn sm ghost" @click="loadUsers">重新整理</button></div>
+        <div class="tbl"><table class="rowedit">
+          <thead><tr><th style="width:150px">帳號</th><th>顯示名稱</th><th style="width:120px">角色</th><th style="width:180px">門市</th><th style="width:80px">狀態</th><th style="width:270px"></th></tr></thead>
+          <tbody>
+            <tr v-for="u in users" :key="u.id" style="cursor:default" :class="{sel: uDirty(u), done: !u.active}">
+              <td><input class="inp" v-model="u.account"></td>
+              <td><input class="inp" v-model="u.display_name"></td>
+              <td><select class="inp" v-model="u.role"><option value="store">門市</option><option value="admin">管理員</option></select></td>
+              <td><select class="inp" v-model="u.store_id"><option :value="null">（未指定）</option><option v-for="s in state.stores" :key="s.id" :value="s.id">{{s.id}} {{s.name}}</option></select></td>
+              <td><span class="pill" :class="u.active ? 'notified' : 'cancelled'">{{u.active ? '啟用' : '停用'}}</span></td>
+              <td class="nw">
+                <button class="btn xs fill" :disabled="!uDirty(u) || uBusy" @click="saveUser(u)">儲存</button>
+                <button class="btn xs" :disabled="uBusy" @click="openPw(u)">修改密碼</button>
+                <button class="btn xs" :class="u.active ? 'danger' : ''" :disabled="uBusy" @click="toggleActive(u)">{{u.active ? '停用' : '啟用'}}</button>
+              </td>
+            </tr>
+            <tr class="empty-row" v-if="!users.length"><td colspan="6">尚無帳號</td></tr>
+          </tbody>
+        </table></div>
+        <p class="small muted" style="margin-top:8px">在 Supabase 後台 Authentication 新增的 @rx.linyao.local 使用者也會出現在這裡，指定角色與門市後即可使用。</p>
+      </div>
+      <div class="mask" v-if="pw.open" @mousedown.self="pw.open=false">
+        <div class="modal" style="width:min(380px,100%)">
+          <header><h3><i class="sl"></i>修改密碼</h3><button class="x" @click="pw.open=false">取消</button></header>
+          <p class="small">帳號：<b>{{pw.user.account}}</b>　{{pw.user.display_name}}</p>
+          <div class="lbl" style="margin:8px 0 4px">新密碼 <span class="opt">至少 6 碼</span></div>
+          <div class="pwbox"><input class="inp big" :type="pw.show ? 'text' : 'password'" v-model="pw.value" autocomplete="new-password">
+            <button type="button" class="eye" @click="pw.show=!pw.show">{{pw.show ? '🙈' : '👁'}}</button></div>
+          <div class="lbl" style="margin:10px 0 4px">再輸入一次</div>
+          <input class="inp big" :class="{err: pw.value2 && pw.value2!==pw.value}" :type="pw.show ? 'text' : 'password'" v-model="pw.value2" autocomplete="new-password" @keydown.enter="submitPw">
+          <div class="btns" style="justify-content:flex-end;margin-top:14px"><button class="btn fill" :disabled="uBusy" @click="submitPw">確認修改</button></div>
+        </div>
       </div>
     </template>
 
@@ -165,9 +235,8 @@ export default {
     </div>
 
     <div class="card" v-if="tab==='phrase'">
-      <CrudTable table="rx_phrases" :query="b=>b.is('store_id',null).order('sort')" @vue:unmounted="reloadAll"
-        :defaults="()=>({store_id:null,text:'',sort:0})" hint="全門市共用的備註片語；各門市另可在「門市設定」新增自己的。"
-        :cols="[{key:'text',label:'片語'},{key:'sort',label:'排序',type:'number',w:'90px'}]" />
+      <p class="small muted" style="margin:0 0 10px">全門市共用的備註片語（拖拉調整順序，變更即儲存）；各門市另可在「門市設定」新增自己的。</p>
+      <PhraseEditor />
     </div>
 
     <div class="card" v-if="tab==='params'">
