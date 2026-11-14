@@ -242,7 +242,7 @@ export const HospitalInput = {
 
 // ---------------------------------------------------------------- 科別
 export const DeptInput = {
-  props: { code: String, name: String },
+  props: { code: String, name: String, placeholder: { type: String, default: '代碼或名稱，清單外可直接輸入' } },
   emits: ['update:code', 'update:name'],
   setup(props, { emit }) {
     const cur = () => state.depts.find(d => d.code === props.code);
@@ -274,7 +274,7 @@ export const DeptInput = {
     return { text, list, pick, onBlur, free, ...L };
   },
   template: `<div style="position:relative">
-    <input class="inp" data-nav v-model="text" autocomplete="off" placeholder="代碼或名稱，清單外可直接輸入"
+    <input class="inp" data-nav v-model="text" autocomplete="off" :placeholder="placeholder"
       :title="free ? '清單外科別（自行輸入）' : ''"
       @input="open=true" @click="open=true" @focus="$event.target.select()" @blur="onBlur" @keydown="onKey">
     <span v-if="free" class="tiny muted" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none">清單外</span>
@@ -615,10 +615,10 @@ export const OrderForm = {
   template: `<div ref="root" @keydown="onFormKey" class="oform">
     <div class="form">
       <div class="fld c4">
-        <label>姓名 <span class="req">*</span></label>
+        <label>姓名 <span class="req">*</span><span class="opt">姓名／電話</span></label>
         <div style="position:relative">
           <input ref="nameEl" class="inp big" :class="{err:errs.name}" data-nav v-model="f.patient_name" autocomplete="off"
-            placeholder="姓名或電話，帶出過往紀錄" @input="onName" @keydown="onNameKey" @blur="onNameBlur"
+            @input="onName" @keydown="onNameKey" @blur="onNameBlur"
             @focus="sugg.length && (suggOpen = true)">
           <div class="dd sugg" v-if="suggOpen">
             <div v-for="(s,i) in sugg" :key="i" class="it" :class="{on:i===suggIdx}" @mousedown.prevent="pickSugg(s)">
@@ -638,13 +638,13 @@ export const OrderForm = {
         </div>
       </div>
       <div class="fld c3">
-        <label>生日</label>
-        <RocDate v-model="f.birth_date" birth placeholder="0750312 或 75/**/12" />
+        <label>生日 <span class="opt">支援 * 隱碼輸入</span></label>
+        <RocDate v-model="f.birth_date" birth placeholder="" />
       </div>
       <div class="fld c5">
         <label>電話 <span class="req" v-if="phoneReq">*</span><span class="opt" v-else>LINE／自取可不填</span></label>
         <input class="inp big num" :class="{err:errs.phone}" data-nav :value="f.phone" @input="onPhone" @blur="checkOpen"
-          inputmode="numeric" maxlength="10" autocomplete="off" placeholder="09xxxxxxxx">
+          inputmode="numeric" maxlength="10" autocomplete="off">
       </div>
 
       <div class="fld c12" v-if="family">
@@ -680,8 +680,8 @@ export const OrderForm = {
         <HospitalInput v-model:code="f.hospital_code" v-model:name="f.hospital_name" @pick="onHospPick" />
       </div>
       <div class="fld c5">
-        <label>科別</label>
-        <DeptInput v-model:code="f.dept_code" v-model:name="f.dept_name" />
+        <label>科別 <span class="opt">科別代碼／名稱</span></label>
+        <DeptInput v-model:code="f.dept_code" v-model:name="f.dept_name" placeholder="" />
       </div>
       <div class="fld c7" v-if="state.quick.length">
         <div class="tiles">
@@ -701,13 +701,13 @@ export const OrderForm = {
       <div class="fld c4" v-for="i in 3" :key="i" :data-k="'d'+i">
         <label :class="'lq'+i">第{{['一','二','三'][i-1]}}次領藥
           <span class="pill" v-if="edit && fillOf(i)" :class="fillOf(i).status">{{FILL_STATUS[fillOf(i).status]}}</span></label>
-        <RocDate v-model="f.dates[i-1]" :prev="i>1 ? f.dates[i-2] : ''" :disabled="edit && ['notified','picked'].includes(fillOf(i)?.status)" />
+        <RocDate v-model="f.dates[i-1]" placeholder="" :prev="i>1 ? f.dates[i-2] : ''" :disabled="edit && ['notified','picked'].includes(fillOf(i)?.status)" />
       </div>
       <div class="fld c12" v-if="errs.dates"><div class="hint err">{{errs.dates}}</div></div>
 
       <div class="fld c12">
         <label>備註</label>
-        <input class="inp" data-nav v-model="f.note" autocomplete="off" :placeholder="edit ? '可直接輸入，或點下方常用片語' : '可直接輸入，或點下方常用片語；Enter 跳到「儲存並列印」'">
+        <input class="inp" data-nav v-model="f.note" autocomplete="off">
         <div class="chips" v-if="state.phrases.length">
           <button type="button" tabindex="-1" class="chip" v-for="p in state.phrases" :key="p.id" :class="{on:hasPhrase(p.text)}"
             @click="togglePhrase(p.text)">{{p.text}}</button>
