@@ -69,9 +69,13 @@ export default {
     async function callFn(body) {
       const { data, error } = await sb.functions.invoke('rx-admin-users', { body });
       if (error) {
-        let m = error.message;
-        try { m = (await error.context.json()).error || m; } catch { /* ignore */ }
-        throw new Error(/Failed to send|not found|404/i.test(m) ? '尚未部署 Edge Function「rx-admin-users」，請見 README；或先在 Supabase 後台 Authentication 新增使用者' : m);
+        let m = error.message || '';
+        try { m = (await error.context.json()).error || m; } catch { /* 不是 JSON 回應 */ }
+        const status = error.context?.status;
+        if (status === 404) throw new Error('找不到 Edge Function「rx-admin-users」：請確認已部署在同一個 Supabase 專案，且名稱完全相同');
+        if (status === 401) throw new Error('Edge Function 拒絕驗證（401）：請用 --no-verify-jwt 重新部署（函式內已自行檢查管理員身分）');
+        if (/Failed to send/i.test(m)) throw new Error('無法連線到 Edge Function（可能未部署、專案網址不符，或平台 JWT 驗證擋下請求）：' + m);
+        throw new Error(m || '帳號建立失敗');
       }
       if (data?.error) throw new Error(data.error);
       return data;
