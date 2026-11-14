@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x86</PlatformTarget>
+    <StartupObject>RxBridge.RxBridge</StartupObject>
+    <RootNamespace>RxBridge</RootNamespace>
+    <AssemblyName>RxBridge</AssemblyName>
+    <OptionStrict>Off</OptionStrict>
+    <OptionInfer>On</OptionInfer>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="Microsoft.VisualBasic" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="RxBridge.ini" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="setup_urlacl.bat" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
