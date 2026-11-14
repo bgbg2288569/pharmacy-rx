@@ -45,27 +45,30 @@ function notifyText(m) {
   const n = m.filter(x => x !== '自取');
   return n.length ? n.join('/') + '通知' : '自取';
 }
+const SEQ_MARK = { 1: '➊', 2: '➋', 3: '➌' };
 function labelHtml(o, fills) {
   const fs = fillsActive(fills);
   const W = 37;                                         // 可用寬度（40mm − 左右邊界）
-  const RW = 21.5;                                      // 右側文字欄寬度
+  const RW = 20.2;                                      // 右側文字欄寬度（姓名與醫院等同寬）
   const lines = [
     ['h', shortHosp(o.hospital_code, o.hospital_name)],
     ['d', o.dept_name],
     ['p', o.phone],
     ['n', notifyText(o.notify_methods)],
   ].filter(x => x[1]);
-  const lineMax = lines.length <= 3 ? 3.5 : 3.1;
+  const lineMax = lines.length <= 3 ? 3.4 : 3;
   const info = lines.map(([k, t]) => `<div class="${k}" style="font-size:${fit(t, RW, lineMax)}mm">${esc(t)}</div>`).join('');
-  // 領藥日：序號用黑框圈（不靠底色，熱感印表機也印得出來）
+  // 領藥日：序號用 ➊➋➌（實心黑圓白字的文字符號，不靠底色，熱感印表機也印得出來）
   const each = fs.length ? W / fs.length : W;
-  const dsz = Math.min(6, (each - 0.6) / 3.35).toFixed(2);
-  const fl = fs.map(f => `<span><b>${f.seq}</b>${mdOf(f.due_date)}</span>`).join('');
+  const dsz = Math.min(5.2, (each - 1.2) / 3.8).toFixed(2);
+  const fl = fs.map(f => `<span><b>${SEQ_MARK[f.seq] || f.seq}</b>${mdOf(f.due_date)}</span>`).join('');
   return `<div class="lb">
-    <div class="nm" style="font-size:${fit(o.patient_name, W, 6.2)}mm">${esc(o.patient_name)}</div>
     <div class="mid">
       <div class="qrw"><div class="qr">${qrSvg(o.order_no)}</div><div class="no">${esc(fmtNo(o.order_no))}</div></div>
-      <div class="info">${info}</div>
+      <div class="info">
+        <div class="nm" style="font-size:${fit(o.patient_name, RW, 5.6)}mm">${esc(o.patient_name)}</div>
+        ${info}
+      </div>
     </div>
     <div class="fl${fs.length === 1 ? ' one' : ''}" style="font-size:${dsz}mm">${fl}</div>
   </div>`;
@@ -117,20 +120,19 @@ const CSS = {
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000}
     .lb{width:40mm;height:30mm;padding:1mm 1.5mm .8mm;box-sizing:border-box;display:flex;flex-direction:column;page-break-after:always;overflow:hidden}
-    .nm{font-weight:900;white-space:nowrap;overflow:hidden;line-height:1.08;letter-spacing:0}
-    .mid{display:flex;gap:1.6mm;align-items:center;margin-top:.5mm}
-    .qrw{flex:none;width:12.6mm;text-align:center;background:#fff}
-    .qr{width:12.6mm;height:12.6mm}.qr svg{width:100%;height:100%;display:block}
-    .no{font-size:1.5mm;font-family:Arial,sans-serif;margin-top:.3mm;white-space:nowrap;letter-spacing:-.05mm}
-    .info{min-width:0;flex:1;line-height:1.15;font-weight:700}
+    .mid{display:flex;gap:1.3mm;align-items:center;flex:1;min-height:0}
+    .qrw{flex:none;width:15.5mm;text-align:center;background:#fff}
+    .qr{width:15mm;height:15mm;margin:0 auto}.qr svg{width:100%;height:100%;display:block}
+    .no{font-size:2.25mm;font-weight:700;font-family:Arial,sans-serif;margin-top:.4mm;white-space:nowrap;letter-spacing:-.03mm}
+    .info{min-width:0;flex:1;line-height:1.13;font-weight:700}
     .info>div{white-space:nowrap;overflow:hidden}
-    .info .p{font-family:Arial,sans-serif;font-weight:900;letter-spacing:-.05mm}
-    .fl{margin-top:auto;border-top:.55mm solid #000;padding-top:.4mm;font-weight:900;font-family:Arial,${FONT};
-      display:flex;justify-content:space-between;white-space:nowrap;line-height:1.05;letter-spacing:-.04em}
-    .fl.one{justify-content:center}
+    .info .nm{font-weight:900;line-height:1.1;margin-bottom:.3mm}
+    .info .p{font-family:Arial,sans-serif;font-weight:900;letter-spacing:-.04mm}
+    .fl{border-top:.55mm solid #000;padding-top:.5mm;font-weight:700;font-family:Arial,${FONT};
+      display:flex;justify-content:space-around;white-space:nowrap;line-height:1.1;letter-spacing:.02em}
     .fl span{display:flex;align-items:center}
-    .fl b{display:inline-grid;place-items:center;width:1.05em;height:1.05em;font-size:.66em;border:.35mm solid #000;border-radius:50%;
-      color:#000;margin-right:.12em;letter-spacing:0;box-sizing:border-box}`,
+    .fl b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;
+      font-size:1.08em;line-height:1;position:relative;top:.07em;margin-right:.18em;letter-spacing:0}`,
   receipt: `@page{margin:0}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000}
     .rc{padding:3mm 2mm 6mm;box-sizing:border-box;font-size:10pt;page-break-after:always}

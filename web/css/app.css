@@ -221,7 +221,8 @@ td .t{font-weight:700;color:var(--ink)}
 .drawer{position:fixed;top:0;right:0;bottom:0;width:min(640px,100%);background:#fff;z-index:51;box-shadow:-20px 0 50px rgba(0,30,28,.18);overflow-y:auto;padding:20px 22px 40px;animation:slidein .2s ease}
 @keyframes slidein{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
 @keyframes fadein{from{opacity:0}to{opacity:1}}
-.staffcode{font-family:var(--f-num);font-size:34px;font-weight:900;letter-spacing:8px;text-align:center}
+.staffcode{font-family:var(--f-num);font-size:34px;font-weight:900;letter-spacing:8px;text-align:center;-webkit-text-security:disc;text-security:disc}
+/* 人員代碼用一般文字框＋遮罩顯示，避免瀏覽器把它當成密碼、跳出 Google 密碼管理員 */
 .staffname{text-align:center;font-weight:800;font-size:18px;min-height:30px;color:var(--teal-ink)}
 
 /* detail */

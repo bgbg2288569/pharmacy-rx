@@ -351,8 +351,9 @@ export const StaffPrompt = {
         <div class="chips" style="margin-top:6px"><button type="button" class="chip" v-for="r in REASONS" :key="r" :class="{on:reason===r}" @click="reason=r; inp && inp.focus()">{{r}}</button></div>
         <div class="lbl" style="margin:14px 0 6px">人員代碼</div>
       </div>
-      <input ref="inp" class="inp staffcode" :class="{err:shake}" v-model="code" type="password" inputmode="numeric"
-        autocomplete="off" @keydown.enter.prevent="ok" @keydown.esc="cancel" placeholder="••••">
+      <input ref="inp" class="inp staffcode" :class="{err:shake}" v-model="code" type="text" inputmode="numeric"
+        name="rx-staff-code" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+        data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other" @keydown.enter.prevent="ok" @keydown.esc="cancel" placeholder="••••">
       <div class="staffname" style="margin-top:10px">{{ hit ? '👤 ' + hit.name : (code ? '查無此代碼' : '請輸入人員代碼後按 Enter') }}</div>
       <div class="btns" style="justify-content:flex-end;margin-top:12px"><button class="btn fill" :disabled="!hit" @click="ok">確認</button></div>
     </div>
