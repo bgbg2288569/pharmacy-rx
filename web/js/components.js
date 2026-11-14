@@ -4,7 +4,7 @@ import {
   sb, state, q, rpc, toast, toastErr, NOTIFY, NOTIFY_CLS, FILL_STATUS, ORDER_STATUS, ACTION_LABEL, CIRCLED,
   parseRocInput, rocOf, fullOf, weekOf, addDays, todayISO, diffDays, dtOf, dayOf, fmtNo, onlyDigits, debounce,
   findStaff, askStaff, bridgeSearch, bump, storeSetting, isoOf, parseISO, fillTpl, copyText, shortHosp, ageOf, birthOf, selfOnly,
-  parseBirthInput, birthMatch, isMasked, focusNext, askConfirm, DEFAULT_CANCEL_REASONS, loadStoreData,
+  parseBirthInput, birthMatch, isMasked, focusNext, askConfirm, DEFAULT_CANCEL_REASONS, loadStoreData, useDirty,
 } from './lib.js';
 import { printOrder, getPrintMode, setPrintMode, PRINT_MODES } from './print.js';
 
@@ -992,42 +992,55 @@ export const SortableChips = {
   </div>`,
 };
 
-// ---------------------------------------------------------------- 片語維護（門市或全域），拖拉排序、即時儲存
+// ---------------------------------------------------------------- 片語維護（門市或全域）：只改畫面，按「儲存全部」才寫入
+/** 讀取片語清單（store_id 為 null 表示全域） */
+export async function loadPhraseList(storeId) {
+  const b = sb.from('rx_phrases').select('id,text,sort,store_id');
+  return q((storeId ? b.eq('store_id', storeId) : b.is('store_id', null)).order('sort').order('id'));
+}
+/** 把畫面上的片語清單寫回資料庫：刪掉移除的、新增沒有 id 的、依目前順序更新排序 */
+export async function savePhraseList(storeId, orig, cur) {
+  const keep = new Set(cur.filter(r => r.id).map(r => r.id));
+  const del = orig.filter(r => !keep.has(r.id)).map(r => r.id);
+  if (del.length) await q(sb.from('rx_phrases').delete().in('id', del));
+  const add = cur.map((r, i) => ({ r, i })).filter(x => !x.r.id);
+  if (add.length) await q(sb.from('rx_phrases').insert(add.map(x => ({ store_id: storeId, text: x.r.text, sort: x.i + 1 }))));
+  const origSort = Object.fromEntries(orig.map(r => [r.id, r.sort]));
+  await Promise.all(cur.map((r, i) => (r.id && origSort[r.id] !== i + 1 ? q(sb.from('rx_phrases').update({ sort: i + 1 }).eq('id', r.id)) : null)).filter(Boolean));
+}
 export const PhraseEditor = {
   components: { SortableChips },
-  props: { storeId: { type: String, default: null } },
-  setup(props) {
-    const rows = ref([]);
+  props: { modelValue: { type: Array, default: () => [] } },
+  emits: ['update:modelValue'],
+  setup(props, { emit }) {
     const text = ref('');
-    const base = () => (props.storeId ? sb.from('rx_phrases').select('*').eq('store_id', props.storeId) : sb.from('rx_phrases').select('*').is('store_id', null));
-    async function load() { try { rows.value = await q(base().order('sort').order('id')); } catch (e) { toastErr(e); } }
-    watch(() => props.storeId, load);
-    onMounted(load);
-    async function add() {
+    function add() {
       const t = text.value.trim();
       if (!t) return;
-      if (rows.value.some(r => r.text === t)) { toast('已經有這個片語', 'warn'); return; }
-      try {
-        await q(sb.from('rx_phrases').insert({ store_id: props.storeId, text: t, sort: rows.value.length + 1 }));
-        text.value = ''; await load(); loadStoreData();
-      } catch (e) { toastErr(e); }
+      if (props.modelValue.some(r => r.text === t)) { toast('已經有這個片語', 'warn'); return; }
+      emit('update:modelValue', [...props.modelValue, { id: null, text: t }]); text.value = '';
     }
-    async function remove(r) {
-      try { await q(sb.from('rx_phrases').delete().eq('id', r.id)); await load(); loadStoreData(); } catch (e) { toastErr(e); }
-    }
-    async function reorder(list) {
-      rows.value = list;
-      try {
-        await Promise.all(list.map((r, i) => q(sb.from('rx_phrases').update({ sort: i + 1 }).eq('id', r.id))));
-        toast('順序已儲存', 'ok', 1200); loadStoreData();
-      } catch (e) { toastErr(e); load(); }
-    }
-    return { rows, text, add, remove, reorder };
+    const remove = r => emit('update:modelValue', props.modelValue.filter(x => x !== r));
+    const reorder = list => emit('update:modelValue', list);
+    return { text, add, remove, reorder };
   },
   template: `<div>
-    <SortableChips :items="rows" :label="r => r.text" @reorder="reorder" @remove="remove" />
+    <SortableChips :items="modelValue" :label="r => r.text" @reorder="reorder" @remove="remove" />
     <div class="inline addrow"><input class="inp" v-model="text" placeholder="輸入新片語後按 Enter" @keydown.enter.prevent="add"><button class="btn sm" @click="add">＋ 新增</button></div>
   </div>`,
+};
+
+// ---------------------------------------------------------------- 未儲存變更提示列（固定在畫面下方）
+export const UnsavedBar = {
+  props: { dirty: Boolean, busy: Boolean, count: { type: Number, default: 0 } },
+  emits: ['save', 'discard'],
+  template: `<transition name="ubar"><div class="unsaved" v-if="dirty">
+    <span class="ic">!</span><b>有未儲存的變更</b><span class="small" v-if="count">（{{count}} 項）</span>
+    <span class="small muted">設定完成後按「儲存全部」一次寫入；離開本頁前會提醒</span>
+    <span style="flex:1"></span>
+    <button class="btn sm ghost" :disabled="busy" @click="$emit('discard')">放棄變更</button>
+    <button class="btn sm fill" :disabled="busy" @click="$emit('save')">{{busy ? '儲存中…' : '儲存全部'}}</button>
+  </div></transition>`,
 };
 
 // ---------------------------------------------------------------- 通知範本：點標籤插入
@@ -1056,79 +1069,105 @@ export const TplInput = {
 
 // ---------------------------------------------------------------- 可編輯表格（管理頁用）
 export const CrudTable = {
+  components: { UnsavedBar },
   props: {
     table: String, pk: { type: Array, default: () => ['id'] }, cols: Array, query: Function,
     defaults: { type: Function, default: () => ({}) }, canAdd: { type: Boolean, default: true },
     canDelete: { type: Boolean, default: true }, reloadKey: [String, Number], hint: String,
   },
-  setup(props) {
+  emits: ['saved'],
+  setup(props, { emit }) {
+    // 編輯、新增、刪除都先只改畫面（刪除的列先標記），按「儲存全部」才一起寫入資料庫
     const rows = ref([]);
     const loading = ref(false);
+    const busy = ref(false);
+    const snap = r => JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith('_'))));
     async function load() {
       loading.value = true;
       try {
         let b = sb.from(props.table).select('*');
         if (props.query) b = props.query(b);
         const data = await q(b);
-        rows.value = data.map(r => ({ ...r, _o: JSON.stringify(r), _new: false }));
+        rows.value = data.map(r => ({ ...r, _o: snap(r), _new: false, _del: false }));
       } catch (e) { toastErr(e); } finally { loading.value = false; }
     }
-    watch(() => props.reloadKey, load);
+    watch(() => props.reloadKey, () => { if (!dirtyCount.value || confirm('重新載入會放棄未儲存的變更，確定？')) load(); });
     onMounted(load);
     const clean = r => Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith('_') && (props.cols.some(c => c.key === k) || props.pk.includes(k))));
-    const dirty = r => r._new || JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith('_')))) !== r._o;
-    function add() { rows.value.unshift({ ...props.defaults(), _new: true, _o: '' }); }
-    async function save(r) {
+    const changed = r => r._new || r._del || snap(r) !== r._o;
+    const dirtyCount = computed(() => rows.value.filter(changed).length);
+    useDirty('crud:' + props.table, computed(() => dirtyCount.value > 0));
+    function add() { rows.value.unshift({ ...props.defaults(), _new: true, _del: false, _o: '' }); }
+    function del(r) { if (r._new) rows.value = rows.value.filter(x => x !== r); else r._del = !r._del; }
+    function prep(r) {
+      const data = clean(r);
+      for (const c of props.cols) if (c.type === 'number' && data[c.key] !== undefined && data[c.key] !== '') data[c.key] = Number(data[c.key]);
+      for (const c of props.cols) if (c.nullable && data[c.key] === '') data[c.key] = null;
+      return data;
+    }
+    async function saveAll() {
+      const todo = rows.value.filter(changed);
+      if (!todo.length) return;
+      busy.value = true;
+      let n = 0;
       try {
-        const data = clean(r);
-        for (const c of props.cols) if (c.type === 'number' && data[c.key] !== undefined && data[c.key] !== '') data[c.key] = Number(data[c.key]);
-        for (const c of props.cols) if (c.nullable && data[c.key] === '') data[c.key] = null;
-        if (r._new) {
-          if (props.pk.includes('id') && data.id === undefined) delete data.id;
-          await q(sb.from(props.table).insert(data));
-        } else {
-          let b = sb.from(props.table).update(data);
-          for (const k of props.pk) b = b.eq(k, JSON.parse(r._o)[k]);
-          await q(b);
+        for (const r of todo) {
+          if (r._del) {
+            let b = sb.from(props.table).delete();
+            for (const k of props.pk) b = b.eq(k, JSON.parse(r._o)[k]);
+            await q(b);
+            rows.value = rows.value.filter(x => x !== r);
+          } else if (r._new) {
+            const data = prep(r);
+            if (props.pk.includes('id') && data.id === undefined) delete data.id;
+            await q(sb.from(props.table).insert(data));
+            r._new = false; r._o = snap(r);
+          } else {
+            let b = sb.from(props.table).update(prep(r));
+            for (const k of props.pk) b = b.eq(k, JSON.parse(r._o)[k]);
+            await q(b);
+            r._o = snap(r);
+          }
+          n++;
         }
-        toast('已儲存', 'ok', 1400);
-        await load();
-      } catch (e) { toastErr(e); }
+        toast(`已儲存 ${n} 筆變更`, 'ok', 1600);
+        await load(); emit('saved');
+      } catch (e) {
+        toastErr(e);
+        if (n) toast(`前 ${n} 筆已儲存，其餘尚未儲存`, 'warn');
+      } finally { busy.value = false; }
     }
-    async function del(r) {
-      if (r._new) { rows.value = rows.value.filter(x => x !== r); return; }
-      if (!confirm('確定刪除這一筆？')) return;
-      try {
-        let b = sb.from(props.table).delete();
-        for (const k of props.pk) b = b.eq(k, r[k]);
-        await q(b); toast('已刪除', 'ok', 1400); await load();
-      } catch (e) { toastErr(e); }
-    }
-    return { rows, loading, add, save, del, dirty, load };
+    function discard() { if (confirm('放棄所有未儲存的變更？')) load(); }
+    return { rows, loading, busy, add, del, changed, dirtyCount, saveAll, discard, load };
   },
   template: `<div>
     <div class="btns" style="margin-bottom:8px">
       <button class="btn sm" v-if="canAdd" @click="add">＋ 新增</button>
       <span class="small muted" v-if="hint">{{hint}}</span>
       <span class="small muted" v-if="loading">載入中…</span>
+      <span style="flex:1"></span>
+      <button class="btn sm fill" :disabled="!dirtyCount || busy" @click="saveAll">儲存全部<template v-if="dirtyCount">（{{dirtyCount}}）</template></button>
     </div>
     <div class="tbl"><table class="rowedit">
-      <thead><tr><th v-for="c in cols" :key="c.key" :style="{width:c.w}">{{c.label}}</th><th style="width:130px"></th></tr></thead>
+      <thead><tr><th v-for="c in cols" :key="c.key" :style="{width:c.w}">{{c.label}}</th><th style="width:90px"></th></tr></thead>
       <tbody>
-        <tr v-for="(r,i) in rows" :key="i" style="cursor:default" :class="{sel: dirty(r)}">
+        <tr v-for="(r,i) in rows" :key="i" style="cursor:default" :class="{sel: changed(r) && !r._del, deleted: r._del, isnew: r._new}">
           <td v-for="c in cols" :key="c.key">
-            <input v-if="c.type==='bool'" type="checkbox" v-model="r[c.key]">
-            <select v-else-if="c.type==='select'" class="inp" v-model="r[c.key]" :disabled="c.pkLock && !r._new">
+            <input v-if="c.type==='bool'" type="checkbox" v-model="r[c.key]" :disabled="r._del">
+            <select v-else-if="c.type==='select'" class="inp" v-model="r[c.key]" :disabled="(c.pkLock && !r._new) || r._del">
               <option v-for="o in (typeof c.options==='function' ? c.options() : c.options)" :key="o.v" :value="o.v">{{o.t}}</option></select>
             <span v-else-if="c.readonly" class="small">{{r[c.key]}}</span>
-            <input v-else class="inp" v-model="r[c.key]" :type="c.type==='number'?'number':'text'" :disabled="c.pkLock && !r._new" :placeholder="c.ph||''">
+            <input v-else class="inp" v-model="r[c.key]" :type="c.type==='number'?'number':'text'" :disabled="(c.pkLock && !r._new) || r._del" :placeholder="c.ph||''">
           </td>
-          <td class="nw"><button class="btn xs fill" :disabled="!dirty(r)" @click="save(r)">儲存</button>
-            <button class="btn xs danger" v-if="canDelete" @click="del(r)">刪除</button></td>
+          <td class="nw">
+            <span class="tag-new" v-if="r._new">新增</span>
+            <button class="btn xs" :class="r._del ? '' : 'danger'" v-if="canDelete || r._new" @click="del(r)">{{r._del ? '復原' : '刪除'}}</button>
+          </td>
         </tr>
         <tr class="empty-row" v-if="!rows.length && !loading"><td :colspan="cols.length+1">沒有資料</td></tr>
       </tbody>
     </table></div>
+    <UnsavedBar :dirty="dirtyCount>0" :busy="busy" :count="dirtyCount" @save="saveAll" @discard="discard" />
   </div>`,
 };
 

@@ -563,3 +563,36 @@ body{container-type:inline-size;container-name:page}
 /* v1.9 螢幕縮放：依視窗大小自動放大（html zoom），列印不受影響 */
 .zoomsel{font:inherit;font-size:12.5px;font-weight:700;border:1.5px solid var(--line2);border-radius:99px;padding:3px 8px;color:var(--muted);background:#fff;cursor:pointer}
 @media print{html{zoom:1!important}}
+
+/* v1.10 預作異常警示框 */
+.alarm-mask{z-index:80;background:rgba(40,0,0,.55)}
+.modal.alarm{width:min(560px,100%);text-align:center;padding:26px 28px 18px;border-top:10px solid var(--bad);animation:alarmIn .25s}
+.modal.alarm.warn{border-top-color:var(--orange)}
+.alarm .al-ic{width:64px;height:64px;margin:0 auto 10px;border-radius:50%;display:grid;place-items:center;font-size:34px;font-weight:900;color:#fff;background:var(--bad);animation:alarmPulse 1s infinite}
+.alarm.warn .al-ic{background:var(--orange)}
+.alarm .al-title{font-size:24px;font-weight:900;color:var(--ink);line-height:1.3}
+.alarm .al-sub{font-size:16px;margin-top:6px;color:var(--muted);font-weight:700}
+.alarm .al-hint{margin-top:14px;padding:10px 14px;border-radius:14px;background:var(--bad-soft);color:var(--bad-ink);font-weight:800;font-size:16px}
+.alarm.warn .al-hint{background:#fff3e3;color:var(--orange-ink)}
+.alarm .al-ign{margin-top:10px;font-size:14px;color:var(--bad-ink)}
+.alarm .al-btns{display:flex;gap:10px;justify-content:center;margin-top:18px}
+.alarm .al-btns .btn{min-width:150px}
+.alarm .al-note{margin-top:12px;font-size:12px;color:var(--muted)}
+@keyframes alarmIn{0%{transform:scale(.9);opacity:0}60%{transform:scale(1.03)}100%{transform:scale(1);opacity:1}}
+@keyframes alarmPulse{0%,100%{box-shadow:0 0 0 0 rgba(229,72,77,.5)}50%{box-shadow:0 0 0 12px rgba(229,72,77,0)}}
+
+/* v1.11 編輯表格：建議清單（醫院、科別）不被表格捲動框裁切 */
+.tbl:has(> table.rowedit){overflow:visible}
+.rowedit tr.deleted td{opacity:.45;text-decoration:line-through}
+.rowedit tr.deleted td:last-child{opacity:1;text-decoration:none}
+.tag-new{display:inline-block;font-size:11px;font-weight:800;color:var(--teal-ink,#008a83);background:#e3faf8;border-radius:99px;padding:1px 7px;margin-right:4px}
+/* 未儲存變更提示列 */
+.unsaved{position:sticky;bottom:14px;z-index:40;margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  background:#fff6ea;border:2px solid var(--orange);border-radius:18px;padding:10px 14px;box-shadow:0 14px 30px -14px rgba(179,90,0,.45)}
+.unsaved .ic{width:24px;height:24px;border-radius:50%;background:var(--orange);color:#fff;display:grid;place-items:center;font-weight:900}
+.unsaved b{color:var(--orange-ink)}
+.ubar-enter-active,.ubar-leave-active{transition:all .2s}
+.ubar-enter-from,.ubar-leave-to{opacity:0;transform:translateY(10px)}
+/* 查詢清單：快速補印貼紙 */
+.stbl td.pr{padding:2px 4px;text-align:center}
+.stbl .prbtn{padding:3px 8px;font-size:14px;line-height:1}

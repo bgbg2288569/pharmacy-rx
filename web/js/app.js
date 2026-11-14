@@ -1,7 +1,7 @@
 // 處方寄單系統 — 主程式（登入、導覽、路由）
 import { createApp, ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { CONFIG } from './config.js';
-import { sb, state, q, isAdmin, loadCommon, loadStoreData, refreshCounts, toastErr, ls, cleanErr } from './lib.js';
+import { sb, state, q, isAdmin, loadCommon, loadStoreData, refreshCounts, toastErr, ls, cleanErr, confirmLeave, hasUnsaved } from './lib.js';
 import { StaffPrompt, OrderDetail, ConfirmModal } from './components.js';
 import EntryPage from './pages/entry.js';
 import SearchPage from './pages/search.js';
@@ -77,7 +77,14 @@ const App = {
   setup() {
     const routes = computed(() => ROUTES.filter(r => !r.admin || isAdmin()));
     const page = computed(() => (routes.value.find(r => r.id === state.route) || routes.value[0]).comp);
-    function readHash() { const id = location.hash.replace(/^#\/?/, '') || 'entry'; state.route = ROUTES.some(r => r.id === id) ? id : 'entry'; }
+    function readHash() {
+      const id = location.hash.replace(/^#\/?/, '') || 'entry';
+      const to = ROUTES.some(r => r.id === id) ? id : 'entry';
+      if (to === state.route) return;
+      // 有未儲存的設定 → 先確認；取消就把網址改回原頁
+      if (!confirmLeave('離開這個頁面')) { history.replaceState(null, '', '#/' + state.route); return; }
+      state.route = to;
+    }
 
     async function afterLogin(user) {
       state.user = user;
@@ -94,14 +101,15 @@ const App = {
         refreshCounts();
       } catch (e) { toastErr(e); }
     }
-    function clearSession() { state.user = null; state.profile = null; state.staff = []; state.operator = null; state.detailId = null; state.draft = null; state.lastSaved = null; }
+    function clearSession() { state.user = null; state.profile = null; state.staff = []; state.operator = null; state.detailId = null; state.draft = null; state.lastSaved = null; state.searchSaved = null; state.dirty = {}; }
 
     async function changeStore(e) {
+      if (!confirmLeave('切換門市')) { e.target.value = state.storeId; return; }
       state.storeId = e.target.value; ls.set('admin_store', state.storeId);
       state.detailId = null; state.draft = null; state.lastSaved = null;
       await loadStoreData(); refreshCounts();
     }
-    async function logout() { await sb.auth.signOut(); }
+    async function logout() { if (!confirmLeave('登出')) return; await sb.auth.signOut(); }
     const storeName = computed(() => state.stores.find(s => s.id === state.storeId)?.name || '');
 
     function onKey(e) { if (e.key === 'Escape' && !state.ask && state.detailId) state.detailId = null; }
@@ -110,6 +118,7 @@ const App = {
       readHash();
       window.addEventListener('hashchange', readHash);
       window.addEventListener('keydown', onKey);
+      window.addEventListener('beforeunload', e => { if (hasUnsaved()) { e.preventDefault(); e.returnValue = ''; } });
       const { data } = await sb.auth.getSession();
       if (data.session) await afterLogin(data.session.user);
       state.ready = true;

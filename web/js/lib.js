@@ -1,5 +1,5 @@
 // 共用：Supabase、全域狀態、日期（民國年）、寄單編號檢核、提示音、人員代碼、藥局系統橋接
-import { reactive } from 'vue';
+import { reactive, watch, onUnmounted } from 'vue';
 import { createClient } from '@supabase/supabase-js';
 import { CONFIG } from './config.js';
 
@@ -26,7 +26,24 @@ export const state = reactive({
   route: 'entry', detailId: null, ask: null, toasts: [], tick: 0, counts: {},
   operator: null, bridge: 'off', confirm: null,
   draft: null, lastSaved: null,          // 寄單輸入暫存：切換頁面保留，登出／重新整理／切換門市才清空
+  searchSaved: null,                     // 寄單查詢條件：切換頁面保留，登出／重新整理才清空
+  dirty: {},                             // 各設定區塊是否有未儲存變更 { key: true }
 });
+
+// ---------------- 未儲存變更 ----------------
+export const hasUnsaved = () => Object.values(state.dirty).some(Boolean);
+/** 有未儲存變更時詢問是否放棄；回傳 true 表示可以繼續（離開／切換） */
+export function confirmLeave(what = '離開這個頁面') {
+  if (!hasUnsaved()) return true;
+  if (!window.confirm(`還有未儲存的變更，確定要${what}？\n（按「取消」留在本頁，可先按「儲存全部」）`)) return false;
+  state.dirty = {};
+  return true;
+}
+/** 在元件中登記「是否有未儲存變更」，元件卸載時自動清除 */
+export function useDirty(key, dirtyRef) {
+  watch(dirtyRef, v => { state.dirty = { ...state.dirty, [key]: !!v }; }, { immediate: true });
+  onUnmounted(() => { const d = { ...state.dirty }; delete d[key]; state.dirty = d; });
+}
 
 export const isAdmin = () => state.profile?.role === 'admin';
 export const curStore = () => state.stores.find(s => s.id === state.storeId) || null;

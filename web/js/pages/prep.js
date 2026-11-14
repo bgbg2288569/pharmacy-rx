@@ -1,5 +1,5 @@
 // 預作確認：刷寄單條碼自動比對，或手動點選
-import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import {
   sb, state, q, rpc, toast, toastErr, beep, todayISO, addDays, rocOf, mdOf, weekOf, fmtNo, dtOf, timeOf, validOrderNo,
   ensureOperator, askStaff, setOperator, storeSetting, bump, CIRCLED, shortHosp, fullOf,
@@ -70,7 +70,39 @@ export default {
     function pushRecent(text, kind) { recent.value.unshift({ t: new Date(), text, kind }); recent.value = recent.value.slice(0, 30); }
     function flash(fillId) { flashId.value = fillId; setTimeout(() => { if (flashId.value === fillId) flashId.value = null; }, 1300); }
 
+    // ---- 異常警示：跳出警示框，必須用滑鼠點按鈕才能解除 ----
+    // 警示期間鍵盤（含掃描槍）輸入一律攔下不處理，避免連續刷條碼時把異常處方刷過去
+    const alarm = ref(null);          // { kind, title, sub, hint, fill }
+    const ignored = ref(0);           // 警示期間被攔下的刷條碼次數
+    let alarmTimer = 0;
+    function raiseAlarm(kind, title, sub, hint = '', fill = null) {
+      alarm.value = { kind, title, sub, hint, fill };
+      ignored.value = 0;
+      scanEl.value?.blur();
+      clearInterval(alarmTimer);
+      beep('err');
+      alarmTimer = setInterval(() => beep('err'), 3000);   // 未解除前每 3 秒再響一次
+    }
+    function clearAlarm() { clearInterval(alarmTimer); alarm.value = null; focusScan(); }
+    // 只接受真正的滑鼠點擊（鍵盤 Enter／空白鍵觸發的 click，detail 為 0，不算）
+    const byMouse = e => e && e.detail > 0;
+    function dismissAlarm(e) { if (!byMouse(e)) return; pendingConfirm.value = null; clearAlarm(); }
+    async function alarmForce(e) {
+      if (!byMouse(e)) return;
+      clearInterval(alarmTimer);
+      alarm.value = null;
+      await forceConfirm();
+    }
+    function onKeyCapture(e) {
+      if (!alarm.value) return;
+      if (e.key === 'Enter') ignored.value++;
+      if (e.key.length === 1 || ['Enter', 'Escape', 'Tab', ' ', 'Backspace'].includes(e.key)) { e.preventDefault(); e.stopPropagation(); }
+    }
+    onMounted(() => window.addEventListener('keydown', onKeyCapture, true));
+    onUnmounted(() => { window.removeEventListener('keydown', onKeyCapture, true); clearInterval(alarmTimer); });
+
     async function onScan() {
+      if (alarm.value) return;
       const code = scan.value.replace(/\D/g, '');
       scan.value = '';
       pendingConfirm.value = null;
@@ -78,7 +110,10 @@ export default {
       const op = await ensureOperator();
       focusScan();
       if (!op) return;
-      if (!validOrderNo(code)) { show('err', '條碼無法辨識', `${code}（檢核碼不符，請重刷或手動輸入）`); beep('err'); pushRecent(code + ' 條碼錯誤', 'err'); return; }
+      if (!validOrderNo(code)) {
+        show('err', '條碼無法辨識', `${code}（檢核碼不符）`); pushRecent(code + ' 條碼錯誤', 'err');
+        raiseAlarm('err', '條碼無法辨識', code, '檢核碼不符，請重刷或手動輸入編號'); return;
+      }
       try {
         const r = await rpc('rx_scan', { p_store: state.storeId, p_code: code, p_from: range.from, p_to: range.to, p_staff: op.code });
         const o = r.order || {}, f = r.fill || {};
@@ -86,16 +121,30 @@ export default {
         const hd = `${shortHosp(o.hospital_code, o.hospital_name)} ${o.dept_name || ''}`;
         switch (r.result) {
           case 'ok': show('ok', who, `${hd} · 已確認預作`); beep('ok'); pushRecent(who, 'ok'); flash(f.id); bump(); break;
-          case 'already': show('warn', who, `已確認過（${dtOf(f.prepared_at)} ${f.prepared_by || ''}）`); beep('warn'); pushRecent(who + ' 重複', 'warn'); flash(f.id); break;
-          case 'other_date':
-            show('warn', who, `這張的領藥日不在 ${rocOf(range.from)}${range.to !== range.from ? '～' + rocOf(range.to) : ''} 清單內`);
-            pendingConfirm.value = f; beep('warn'); pushRecent(who + ' 日期不符', 'warn'); break;
-          case 'no_pending': show('err', o.patient_name, '此寄單已沒有待預作的次數'); beep('err'); pushRecent(o.patient_name + ' 無待預作', 'err'); break;
-          case 'cancelled': show('err', o.patient_name, '此寄單已取消'); beep('err'); pushRecent(o.patient_name + ' 已取消', 'err'); break;
-          case 'other_store': show('err', r.patient_name, `這是其他門市（${r.store_id}）的寄單`); beep('err'); break;
-          default: show('err', '查無此寄單', fmtNo(code)); beep('err'); pushRecent(code + ' 查無', 'err');
+          case 'already': {
+            const t = `已確認過（${dtOf(f.prepared_at)} ${f.prepared_by || ''}）`;
+            show('warn', who, t); pushRecent(who + ' 重複', 'warn'); flash(f.id);
+            raiseAlarm('warn', '重複刷到：' + who, `${hd} · ${t}`, '請確認是否有兩張相同的貼紙，或這包藥已經放過'); break;
+          }
+          case 'other_date': {
+            const t = `領藥日不在 ${rocOf(range.from)}${range.to !== range.from ? '～' + rocOf(range.to) : ''} 清單內`;
+            show('warn', who, t); pendingConfirm.value = f; pushRecent(who + ' 日期不符', 'warn');
+            raiseAlarm('warn', '日期不符：' + who, `${hd} · ${t}`, '請確認是否拿錯日期的處方；確定要預作才按「仍要確認」', f); break;
+          }
+          case 'no_pending':
+            show('err', o.patient_name, '此寄單已沒有待預作的次數'); pushRecent(o.patient_name + ' 無待預作', 'err');
+            raiseAlarm('err', '沒有待預作：' + o.patient_name, `${hd} · ${fmtNo(o.order_no)}`, '這張寄單的每一次都已預作或已通知，請確認這包藥'); break;
+          case 'cancelled':
+            show('err', o.patient_name, '此寄單已取消'); pushRecent(o.patient_name + ' 已取消', 'err');
+            raiseAlarm('err', '已取消的寄單：' + o.patient_name, `${hd} · ${fmtNo(o.order_no)}`, '這張寄單已經取消，請勿預作，把這包藥抽出來'); break;
+          case 'other_store':
+            show('err', r.patient_name, `這是其他門市（${r.store_id}）的寄單`); pushRecent((r.patient_name || '') + ' 他店', 'err');
+            raiseAlarm('err', '其他門市的寄單：' + (r.patient_name || ''), `門市 ${r.store_id} · ${fmtNo(code)}`, '請把這包藥抽出來，交回所屬門市'); break;
+          default:
+            show('err', '查無此寄單', fmtNo(code)); pushRecent(code + ' 查無', 'err');
+            raiseAlarm('err', '查無此寄單', fmtNo(code), '請確認條碼是否正確，或此寄單是否已被刪除');
         }
-      } catch (e) { show('err', '連線錯誤', e.message); beep('err'); }
+      } catch (e) { show('err', '連線錯誤', e.message); raiseAlarm('err', '連線錯誤', e.message, '這次刷的條碼沒有處理，網路恢復後請重刷'); }
     }
     async function forceConfirm() {
       const f = pendingConfirm.value; if (!f) return;
@@ -128,7 +177,7 @@ export default {
       ], todo.value);
     }
     const open = id => { state.detailId = id; };
-    return { state, range, rows, late, lastPrep, showLate, allDone, days, tab, scan, scanEl, msg, pendingConfirm, flashId, recent, sortKey, kw, done, todo, shown, pct, shortHosp, fullOf, timeOf,
+    return { alarm, ignored, dismissAlarm, alarmForce, state, range, rows, late, lastPrep, showLate, allDone, days, tab, scan, scanEl, msg, pendingConfirm, flashId, recent, sortKey, kw, done, todo, shown, pct, shortHosp, fullOf, timeOf,
       setDay, onScan, onScanInput, forceConfirm, toggle, switchOp, printTodo, open, focusScan, rocOf, mdOf, weekOf, fmtNo, dtOf, todayISO, CIRCLED };
   },
   template: `<div class="wrap">
@@ -216,6 +265,22 @@ export default {
             <span class="tiny muted">{{timeOf(x.t)}}</span></li>
           <li v-if="!recent.length" style="cursor:default"><span class="muted small">刷條碼後會顯示在這裡</span></li>
         </ul>
+      </div>
+    </div>
+  
+    <div class="mask alarm-mask" v-if="alarm">
+      <div class="modal alarm" :class="alarm.kind" role="alertdialog">
+        <div class="al-ic">{{ alarm.kind === 'err' ? '✕' : '!' }}</div>
+        <div class="al-title">{{alarm.title}}</div>
+        <div class="al-sub">{{alarm.sub}}</div>
+        <div class="al-hint" v-if="alarm.hint">{{alarm.hint}}</div>
+        <div class="al-ign" v-if="ignored">警示期間刷了 {{ignored}} 次條碼，都<b>沒有處理</b>，解除後請重刷</div>
+        <div class="al-btns">
+          <button class="btn lg" v-if="alarm.fill" @click="dismissAlarm">略過，不確認</button>
+          <button class="btn lg orange" v-if="alarm.fill" @click="alarmForce">仍要確認第{{alarm.fill.seq}}次</button>
+          <button class="btn lg fill" v-else @click="dismissAlarm">我知道了，繼續預作</button>
+        </div>
+        <div class="al-note">請用滑鼠點按鈕解除；警示期間鍵盤和掃描槍的輸入都不會處理</div>
       </div>
     </div>
   </div>`,

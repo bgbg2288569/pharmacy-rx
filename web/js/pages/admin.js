@@ -1,7 +1,7 @@
 // 系統管理（管理員）：門市、帳號、人員代碼、醫院、科別、全域片語、系統參數
 import { ref, reactive, computed, onMounted } from 'vue';
-import { sb, state, q, toast, toastErr, loadCommon, loadStoreData, debounce } from '../lib.js';
-import { CrudTable, TplInput, PhraseEditor } from '../components.js';
+import { sb, state, q, toast, toastErr, loadCommon, loadStoreData, debounce, useDirty } from '../lib.js';
+import { CrudTable, TplInput, PhraseEditor, UnsavedBar, loadPhraseList, savePhraseList } from '../components.js';
 
 function parseCsv(text) {
   const rows = []; let row = [], cur = '', inQ = false;
@@ -49,9 +49,16 @@ const CsvImport = {
 };
 
 export default {
-  components: { CrudTable, CsvImport, TplInput, PhraseEditor },
+  components: { CrudTable, CsvImport, TplInput, PhraseEditor, UnsavedBar },
   setup() {
     const tab = ref('stores');
+    // 切換分頁：表格類分頁（門市、人員代碼、醫院、科別）切走會放棄未儲存的變更，先確認
+    function switchTab(k) {
+      if (k === tab.value) return;
+      const crudDirty = Object.entries(state.dirty).some(([key, v]) => v && key.startsWith('crud:'));
+      if (crudDirty && !confirm('這個分頁還有未儲存的變更，切換分頁會放棄這些變更，確定？')) return;
+      tab.value = k;
+    }
     const storeOpts = () => [{ v: null, t: '（未指定）' }, ...state.stores.map(s => ({ v: s.id, t: `${s.id} ${s.name}` }))];
     const staffStoreOpts = () => [{ v: null, t: '全門市通用' }, ...state.stores.map(s => ({ v: s.id, t: `${s.id} ${s.name}` }))];
     const hq = ref('');
@@ -88,11 +95,13 @@ export default {
       } catch (e) { toastErr(e); }
     }
     const uDirty = u => JSON.stringify({ a: u.account, d: u.display_name, r: u.role, s: u.store_id }) !== u._o;
+    const usersDirty = computed(() => users.value.filter(uDirty));
     async function createUser() {
       if (!nu.account || !nu.password) return toast('請輸入帳號與密碼', 'err');
       if (nu.password.length < 6) return toast('密碼至少 6 碼', 'err');
       if (nu.password !== nu.password2) return toast('兩次輸入的密碼不一致', 'err');
       if (nu.role === 'store' && !nu.store_id) return toast('門市帳號需要指定門市', 'err');
+      if (usersDirty.value.length) return toast('帳號清單有未儲存的修改，請先按「儲存全部」再建立新帳號', 'warn');
       uBusy.value = true;
       try {
         const { password2, ...body } = nu;
@@ -102,14 +111,14 @@ export default {
         await loadUsers();
       } catch (e) { toastErr(e); } finally { uBusy.value = false; }
     }
-    async function saveUser(u) {
-      uBusy.value = true;
-      try {
+    async function saveUsers() {
+      for (const u of usersDirty.value) {
         await callFn({ action: 'update', userId: u.id, account: u.account, display_name: u.display_name, role: u.role, store_id: u.store_id || null });
-        toast('已儲存', 'ok', 1400); await loadUsers();
-      } catch (e) { toastErr(e); } finally { uBusy.value = false; }
+        u._o = JSON.stringify({ a: u.account, d: u.display_name, r: u.role, s: u.store_id });
+      }
     }
     async function toggleActive(u) {
+      if (uDirty(u)) return toast('這個帳號有未儲存的修改，請先按「儲存全部」', 'warn');
       const to = !u.active;
       if (!to && !confirm(`停用帳號「${u.account}」？停用後無法登入。`)) return;
       uBusy.value = true;
@@ -129,24 +138,50 @@ export default {
 
     // 系統參數
     const gs = reactive({ notify_template: '', receipt_footer: '', prep_days_ahead: 7 });
-    function loadGs() { for (const k in gs) if (state.settings[k] !== undefined) gs[k] = state.settings[k]; }
+    const gsOrig = ref('');
+    function loadGs() { for (const k in gs) if (state.settings[k] !== undefined) gs[k] = state.settings[k]; gsOrig.value = JSON.stringify(gs); }
+    const gsDirty = computed(() => JSON.stringify(gs) !== gsOrig.value);
     async function saveGs() {
-      try {
-        const rows = Object.entries(gs).map(([key, value]) => ({ key, value: key.endsWith('days') ? Number(value) || 7 : value, updated_at: new Date().toISOString() }));
-        await q(sb.from('rx_settings').upsert(rows, { onConflict: 'key' }));
-        await loadCommon(); toast('系統參數已儲存', 'ok');
-      } catch (e) { toastErr(e); }
+      const rows = Object.entries(gs).map(([key, value]) => ({ key, value: key.endsWith('days') ? Number(value) || 7 : value, updated_at: new Date().toISOString() }));
+      await q(sb.from('rx_settings').upsert(rows, { onConflict: 'key' }));
+      await loadCommon(); loadGs();
     }
-    onMounted(() => { loadGs(); loadUsers(); });
 
-    return { state, tab, storeOpts, staffStoreOpts, hq, hKey, setHq, hospQuery, reloadAll, nu, showPw, users, uBusy, pw, uDirty,
-      createUser, saveUser, toggleActive, openPw, submitPw, loadUsers, storeName, gs, saveGs };
+    // 全域片語
+    const phr = ref([]);
+    const phrOrig = ref([]);
+    async function loadPhr() { try { phrOrig.value = await loadPhraseList(null); phr.value = phrOrig.value.map(r => ({ ...r })); } catch (e) { toastErr(e); } }
+    const phrKey = l => JSON.stringify(l.map(r => [r.id, r.text]));
+    const phrDirty = computed(() => phrKey(phr.value) !== phrKey(phrOrig.value));
+
+    // 帳號／全域片語／系統參數：統一按「儲存全部」
+    const aDirtyCount = computed(() => usersDirty.value.length + (phrDirty.value ? 1 : 0) + (gsDirty.value ? 1 : 0));
+    useDirty('admin', computed(() => aDirtyCount.value > 0));
+    const aBusy = ref(false);
+    async function saveAdmin() {
+      aBusy.value = true;
+      try {
+        if (usersDirty.value.length) await saveUsers();
+        if (phrDirty.value) { await savePhraseList(null, phrOrig.value, phr.value); await loadPhr(); loadStoreData(); }
+        if (gsDirty.value) await saveGs();
+        toast('已全部儲存', 'ok', 1600);
+        await loadUsers();
+      } catch (e) { toastErr(e); } finally { aBusy.value = false; }
+    }
+    function discardAdmin() {
+      if (!confirm('放棄帳號、全域片語、系統參數的未儲存變更？')) return;
+      loadUsers(); loadPhr(); loadGs();
+    }
+    onMounted(() => { loadGs(); loadUsers(); loadPhr(); });
+
+    return { switchTab, usersDirty, phr, aDirtyCount, aBusy, saveAdmin, discardAdmin, state, tab, storeOpts, staffStoreOpts, hq, hKey, setHq, hospQuery, reloadAll, nu, showPw, users, uBusy, pw, uDirty,
+      createUser, toggleActive, openPw, submitPw, loadUsers, storeName, gs, saveGs };
   },
   template: `<div class="wrap">
     <div class="page-head"><h2><i class="sl"></i>系統管理</h2></div>
     <div class="subnav">
       <button v-for="(t,k) in {stores:'門市',users:'帳號',staff:'人員代碼',hosp:'醫院清單',dept:'科別清單',phrase:'全域片語',params:'系統參數'}"
-        :key="k" :class="{on:tab===k}" @click="tab=k">{{t}}</button>
+        :key="k" :class="{on:tab===k}" @click="switchTab(k)">{{t}}</button>
     </div>
 
     <div class="card" v-if="tab==='stores'">
@@ -174,9 +209,9 @@ export default {
       </div>
       <div class="card">
         <div class="btns" style="margin-bottom:8px"><h3 style="margin:0"><i class="sl"></i>帳號清單</h3><span style="flex:1"></span>
-          <button class="btn sm ghost" @click="loadUsers">重新整理</button></div>
+          <button class="btn sm ghost" :disabled="usersDirty.length>0" @click="loadUsers">重新整理</button></div>
         <div class="tbl"><table class="rowedit">
-          <thead><tr><th style="width:150px">帳號</th><th>顯示名稱</th><th style="width:120px">角色</th><th style="width:180px">門市</th><th style="width:80px">狀態</th><th style="width:270px"></th></tr></thead>
+          <thead><tr><th style="width:150px">帳號</th><th>顯示名稱</th><th style="width:120px">角色</th><th style="width:180px">門市</th><th style="width:80px">狀態</th><th style="width:200px"></th></tr></thead>
           <tbody>
             <tr v-for="u in users" :key="u.id" style="cursor:default" :class="{sel: uDirty(u), done: !u.active}">
               <td><input class="inp" v-model="u.account"></td>
@@ -185,7 +220,6 @@ export default {
               <td><select class="inp" v-model="u.store_id"><option :value="null">（未指定）</option><option v-for="s in state.stores" :key="s.id" :value="s.id">{{s.id}} {{s.name}}</option></select></td>
               <td><span class="pill" :class="u.active ? 'notified' : 'cancelled'">{{u.active ? '啟用' : '停用'}}</span></td>
               <td class="nw">
-                <button class="btn xs fill" :disabled="!uDirty(u) || uBusy" @click="saveUser(u)">儲存</button>
                 <button class="btn xs" :disabled="uBusy" @click="openPw(u)">修改密碼</button>
                 <button class="btn xs" :class="u.active ? 'danger' : ''" :disabled="uBusy" @click="toggleActive(u)">{{u.active ? '停用' : '啟用'}}</button>
               </td>
@@ -235,8 +269,8 @@ export default {
     </div>
 
     <div class="card" v-if="tab==='phrase'">
-      <p class="small muted" style="margin:0 0 10px">全門市共用的備註片語（拖拉調整順序，變更即儲存）；各門市另可在「門市設定」新增自己的。</p>
-      <PhraseEditor />
+      <p class="small muted" style="margin:0 0 10px">全門市共用的備註片語（拖拉調整順序，完成後按「儲存全部」）；各門市另可在「門市設定」新增自己的。</p>
+      <PhraseEditor v-model="phr" />
     </div>
 
     <div class="card" v-if="tab==='params'">
@@ -246,7 +280,8 @@ export default {
           <span class="hint">門市可在「門市設定」覆寫</span></div>
         <div class="fld c12"><label>預設發票機單據底部文字</label><input class="inp" v-model="gs.receipt_footer"></div>
       </div>
-      <div class="btns" style="justify-content:flex-end;margin-top:12px"><button class="btn fill" @click="saveGs">儲存</button></div>
     </div>
+
+    <UnsavedBar :dirty="aDirtyCount>0" :busy="aBusy" :count="aDirtyCount" @save="saveAdmin" @discard="discardAdmin" />
   </div>`,
 };

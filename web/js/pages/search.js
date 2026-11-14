@@ -1,8 +1,8 @@
 // 寄單查詢：多條件、模糊搜尋、欄位排序（表格不換行，過長以 … 顯示，滑鼠移上可看全文）
 import { ref, reactive, computed, watch, onMounted } from 'vue';
-import { state, rpc, toastErr, todayISO, addDays, rocOf, fullOf, dtOf, fmtNo, isAdmin, storeSetting, shortHosp, ageOf, FILL_STATUS, ORDER_STATUS } from '../lib.js';
+import { state, rpc, toast, toastErr, todayISO, addDays, rocOf, fullOf, dtOf, fmtNo, isAdmin, storeSetting, shortHosp, ageOf, FILL_STATUS, ORDER_STATUS } from '../lib.js';
 import { RocDate, FillChip, NotifyPills, DeptInput } from '../components.js';
-import { printList } from '../print.js';
+import { printList, printOrder } from '../print.js';
 
 // 「狀態」合併成一個選單：寄單整張的狀態 + 某一次領藥的狀態
 const STATUS_OPTS = [
@@ -18,11 +18,14 @@ const blank = () => ({ keyword: '', hospital: '', dept_code: '', dept_name: '', 
 export default {
   components: { RocDate, FillChip, NotifyPills, DeptInput },
   setup() {
-    const f = reactive(blank());
+    // 查詢條件／排序保留在 state.searchSaved：切換頁面回來還在，登出或重新整理才清空
+    const saved = state.searchSaved;
+    const f = reactive(saved ? { ...blank(), ...saved.f } : blank());
     const rows = ref([]);
     const loading = ref(false);
     const searched = ref(false);
-    const sort = reactive({ key: 'created_at', dir: -1 });
+    const sort = reactive(saved ? { ...saved.sort } : { key: 'created_at', dir: -1 });
+    watch([f, sort], () => { state.searchSaved = { f: { ...f }, sort: { ...sort } }; }, { deep: true });
     const kwEl = ref(null);
 
     // 輸入條件即時查詢：停止輸入 0.35 秒後自動查；相同條件不重查；較慢回來的舊結果不覆蓋新結果
@@ -95,9 +98,15 @@ export default {
 
     watch(() => state.tick, () => { if (searched.value) run(); });
     watch(() => state.storeId, () => { if (searched.value) run(); });
-    onMounted(() => { kwEl.value?.focus(); preset('open'); });
+    onMounted(() => {
+      kwEl.value?.focus();
+      if (!saved) preset('open');
+      else if (hasCond()) run();          // 回到本頁：用保留的條件重新查一次（取得最新資料）
+    });
+    // 清單上快速補印貼紙（固定用 4×3 貼紙格式）
+    function quickLabel(o) { printOrder(o, o.fills, 'label'); toast(`已送出補印貼紙：${o.patient_name}`, 'ok', 1500); }
     const open = id => { state.detailId = id; };
-    return { state, f, rows, sorted, loading, searched, run, clear, preset, by, ar, open, kwEl, exportPrint, exportCsv, staffOf,
+    return { quickLabel, state, f, rows, sorted, loading, searched, run, clear, preset, by, ar, open, kwEl, exportPrint, exportCsv, staffOf,
       isAdmin, rocOf, fullOf, dtOf, fmtNo, shortHosp, ageOf, ORDER_STATUS, STATUS_OPTS };
   },
   template: `<div class="wrap wide">
@@ -140,6 +149,7 @@ export default {
       </div>
       <div class="tbl fixed stbl" style="max-height:calc(100vh / var(--z,1) - 290px)"><table>
         <thead><tr>
+          <th style="width:46px" title="補印貼紙">貼紙</th>
           <th class="sort" v-if="f.all_stores" @click="by('store_name')">門市<span class="ar">{{ar('store_name')}}</span></th>
           <th class="sort" @click="by('created_at')">寄單時間<span class="ar">{{ar('created_at')}}</span></th>
           <th class="sort" @click="by('patient_name')">姓名<span class="ar">{{ar('patient_name')}}</span></th>
@@ -156,6 +166,7 @@ export default {
         </tr></thead>
         <tbody>
           <tr v-for="o in sorted" :key="o.id" @click="open(o.id)" :class="{done:o.status!=='active'}">
+            <td class="pr"><button class="btn xs prbtn" title="補印 4×3 貼紙" @click.stop="quickLabel(o)">🖨</button></td>
             <td v-if="f.all_stores"><span class="pill store">{{o.store_name}}</span></td>
             <td class="lt">{{dtOf(o.created_at)}}</td>
             <td style="--mw:130px" :title="o.patient_name"><span class="t">{{o.patient_name}}</span><span class="famic" v-if="o.family_no" title="有同行家人">👪</span></td>
@@ -170,7 +181,7 @@ export default {
             <td><span class="pill os" :class="'os-'+o.status">{{ORDER_STATUS[o.status]}}</span></td>
             <td class="lt">{{fmtNo(o.order_no)}}</td>
           </tr>
-          <tr class="empty-row" v-if="searched && !rows.length"><td colspan="13">查無符合條件的寄單</td></tr>
+          <tr class="empty-row" v-if="searched && !rows.length"><td colspan="14">查無符合條件的寄單</td></tr>
         </tbody>
       </table></div>
     </div>
