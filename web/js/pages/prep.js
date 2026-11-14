@@ -188,7 +188,7 @@ export default {
             <option value="hospital_name">依醫院</option><option value="due_date">依領藥日</option></select>
           <button class="btn sm" @click="printTodo" :disabled="!todo.length">列印未確認清單</button>
         </div>
-        <div class="tbl" style="max-height:calc(100vh - 200px)"><table>
+        <div class="tbl" style="max-height:calc(100vh / var(--z,1) - 200px)"><table>
           <thead><tr><th style="width:40px"></th><th>姓名</th><th>次數</th><th>領藥日</th><th>醫院</th><th>科別</th><th>通知</th><th>寄單編號</th><th>備註</th><th></th></tr></thead>
           <tbody>
             <tr v-for="r in shown" :key="r.fill_id" :class="{flash: flashId===r.fill_id, done: r.fill_status!=='pending'}" @click="toggle(r)">

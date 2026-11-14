@@ -186,12 +186,13 @@ begin
   if new.email is null or new.email not like '%@rx.linyao.local' then
     return new;
   end if;
+  -- 角色一律先設為門市、不指定門市（無法使用任何資料），由管理員在管理頁指派；
+  -- 不採用註冊時自帶的 role／store_id，避免有人透過公開註冊把自己設成管理員
   insert into rx_users (id, account, display_name, role, store_id)
   values (new.id,
           split_part(new.email, '@', 1),
           coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1)),
-          coalesce(new.raw_user_meta_data->>'role', 'store'),
-          nullif(new.raw_user_meta_data->>'store_id', ''))
+          'store', null)
   on conflict (id) do nothing;
   return new;
 end $$;
@@ -278,6 +279,7 @@ begin
   select coalesce(array_agg(x), '{}') into m from jsonb_array_elements_text(coalesce(p->'notify_methods', '[]')) x;
   if cardinality(m) = 0 then raise exception '請選擇通知方式'; end if;
   if coalesce(p->>'phone', '') <> '' and (p->>'phone') !~ '^\d{1,10}$' then raise exception '電話只能輸入數字，最多 10 碼'; end if;
+  if coalesce(p->>'phone', '') like '09%' and length(p->>'phone') <> 10 then raise exception '手機（09 開頭）須為 10 碼'; end if;
   if (m && array['簡訊','電話']) and coalesce(p->>'phone', '') = '' then raise exception '通知方式含簡訊或電話時，電話必填'; end if;
   if jsonb_array_length(coalesce(p->'fills', '[]')) = 0 then raise exception '請至少輸入一次領藥日期'; end if;
   if coalesce(p->>'birth_date', '') <> '' and (p->>'birth_date') !~ '^\d{4}-(\d{2}|\*\*)-(\d{2}|\*\*)$' then
@@ -607,7 +609,11 @@ begin
     and (nullif(p->>'name', '') is null or o.patient_name ilike '%' || (p->>'name') || '%')
     and (nullif(p->>'phone', '') is null or o.phone like '%' || (p->>'phone') || '%')
     and (nullif(p->>'hospital', '') is null or o.hospital_code like (p->>'hospital') || '%' or o.hospital_name ilike '%' || (p->>'hospital') || '%')
-    and (nullif(p->>'dept_code', '') is null or o.dept_code = p->>'dept_code')
+    and (case when nullif(p->>'dept_code', '') is not null
+              then o.dept_code = p->>'dept_code' or (o.dept_code is null and o.dept_name = p->>'dept_name')
+              when nullif(p->>'dept_name', '') is not null
+              then o.dept_name ilike '%' || (p->>'dept_name') || '%'
+              else true end)
     and (nullif(p->>'staff', '') is null or o.created_staff_code = p->>'staff' or o.created_staff_name ilike '%' || (p->>'staff') || '%')
     and (nullif(p->>'notify', '') is null or (p->>'notify') = any(o.notify_methods))
     and (nullif(p->>'order_status', '') is null or o.status = p->>'order_status')

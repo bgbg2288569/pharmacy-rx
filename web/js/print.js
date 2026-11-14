@@ -35,23 +35,39 @@ function printHtml(html) {
 const FONT = `"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif`;
 const fillsActive = fills => (fills || []).filter(f => f.status !== 'cancelled').sort((a, b) => a.seq - b.seq);
 
-// 貼紙 4×3cm：上方姓名、電話、通知、醫院、科別＋QR；下方領藥日期放大
+// 貼紙 4×3cm：第一列姓名（依字數自動放到最大）；中間左 QR＋編號、右醫院/科別/電話/通知；粗線下方領藥日期
+// 字級以 mm 計算：中文字寬 ≈ 1em、英數 ≈ 0.58em，依可用寬度自動縮放，避免超出貼紙
+const textEm = t => [...String(t || '')].reduce((n, c) => n + (/[\x00-\xff]/.test(c) ? 0.58 : 1), 0);
+const fit = (t, wMm, maxMm, minMm = 1.6) => Math.max(minMm, Math.min(maxMm, wMm / Math.max(1, textEm(t)))).toFixed(2);
+function notifyText(m) {
+  m = m || [];
+  if (!m.length) return '';
+  const n = m.filter(x => x !== '自取');
+  return n.length ? n.join('/') + '通知' : '自取';
+}
 function labelHtml(o, fills) {
   const fs = fillsActive(fills);
-  const size = fs.length <= 1 ? 20 : fs.length === 2 ? 15 : 10.5;
-  const fl = fs.map(f => `<span><i>${f.seq}</i>${mdOf(f.due_date)}</span>`).join('');
+  const W = 37;                                         // 可用寬度（40mm − 左右邊界）
+  const RW = 21.5;                                      // 右側文字欄寬度
+  const lines = [
+    ['h', shortHosp(o.hospital_code, o.hospital_name)],
+    ['d', o.dept_name],
+    ['p', o.phone],
+    ['n', notifyText(o.notify_methods)],
+  ].filter(x => x[1]);
+  const lineMax = lines.length <= 3 ? 3.5 : 3.1;
+  const info = lines.map(([k, t]) => `<div class="${k}" style="font-size:${fit(t, RW, lineMax)}mm">${esc(t)}</div>`).join('');
+  // 領藥日：序號用黑框圈（不靠底色，熱感印表機也印得出來）
+  const each = fs.length ? W / fs.length : W;
+  const dsz = Math.min(6, (each - 0.6) / 3.35).toFixed(2);
+  const fl = fs.map(f => `<span><b>${f.seq}</b>${mdOf(f.due_date)}</span>`).join('');
   return `<div class="lb">
-    <div class="top">
-      <div class="info">
-        <div class="nm">${esc(o.patient_name)}</div>
-        ${o.phone ? `<div class="ph">${esc(o.phone)}</div>` : ''}
-        <div class="sm">${esc((o.notify_methods || []).join('・'))}</div>
-        <div class="sm b">${esc(shortHosp(o.hospital_code, o.hospital_name))}</div>
-        ${o.dept_name ? `<div class="sm b">${esc(o.dept_name)}</div>` : ''}
-      </div>
+    <div class="nm" style="font-size:${fit(o.patient_name, W, 6.2)}mm">${esc(o.patient_name)}</div>
+    <div class="mid">
       <div class="qrw"><div class="qr">${qrSvg(o.order_no)}</div><div class="no">${esc(fmtNo(o.order_no))}</div></div>
+      <div class="info">${info}</div>
     </div>
-    <div class="fl" style="font-size:${size}pt">${fl}</div>
+    <div class="fl${fs.length === 1 ? ' one' : ''}" style="font-size:${dsz}mm">${fl}</div>
   </div>`;
 }
 
@@ -98,22 +114,23 @@ function a5Html(o, fills) {
 
 const CSS = {
   label: `@page{size:40mm 30mm;margin:0}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000}
-    .lb{width:40mm;height:30mm;padding:1.3mm 1.5mm 1mm;box-sizing:border-box;display:flex;flex-direction:column;page-break-after:always;overflow:hidden}
-    .top{display:flex;gap:1.2mm;align-items:flex-start}
-    .info{min-width:0;flex:1;line-height:1.18}
-    .nm{font-size:10.5pt;font-weight:900;white-space:nowrap;overflow:hidden}
-    .ph{font-size:7.5pt;font-weight:700;font-family:Arial,sans-serif;letter-spacing:.1px}
-    .sm{font-size:6.3pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .sm.b{font-weight:700}
-    .qrw{flex:none;width:13mm;text-align:center}
-    .qr{width:13mm;height:13mm}.qr svg{width:100%;height:100%;display:block}
-    .no{font-size:4.6pt;font-family:Arial,sans-serif;margin-top:.3mm;white-space:nowrap}
-    .fl{margin-top:auto;border-top:.25mm solid #000;padding-top:.5mm;font-weight:900;font-family:"Arial Narrow",Arial,${FONT};
-      display:flex;justify-content:space-between;white-space:nowrap;line-height:1.1;letter-spacing:-.2px}
+    .lb{width:40mm;height:30mm;padding:1mm 1.5mm .8mm;box-sizing:border-box;display:flex;flex-direction:column;page-break-after:always;overflow:hidden}
+    .nm{font-weight:900;white-space:nowrap;overflow:hidden;line-height:1.08;letter-spacing:0}
+    .mid{display:flex;gap:1.6mm;align-items:center;margin-top:.5mm}
+    .qrw{flex:none;width:12.6mm;text-align:center;background:#fff}
+    .qr{width:12.6mm;height:12.6mm}.qr svg{width:100%;height:100%;display:block}
+    .no{font-size:1.5mm;font-family:Arial,sans-serif;margin-top:.3mm;white-space:nowrap;letter-spacing:-.05mm}
+    .info{min-width:0;flex:1;line-height:1.15;font-weight:700}
+    .info>div{white-space:nowrap;overflow:hidden}
+    .info .p{font-family:Arial,sans-serif;font-weight:900;letter-spacing:-.05mm}
+    .fl{margin-top:auto;border-top:.55mm solid #000;padding-top:.4mm;font-weight:900;font-family:Arial,${FONT};
+      display:flex;justify-content:space-between;white-space:nowrap;line-height:1.05;letter-spacing:-.04em}
+    .fl.one{justify-content:center}
     .fl span{display:flex;align-items:center}
-    .fl i{font-style:normal;background:#000;color:#fff;border-radius:50%;width:1.15em;height:1.15em;font-size:.5em;
-      display:inline-grid;place-items:center;margin-right:.12em;font-family:Arial,sans-serif}`,
+    .fl b{display:inline-grid;place-items:center;width:1.05em;height:1.05em;font-size:.66em;border:.35mm solid #000;border-radius:50%;
+      color:#000;margin-right:.12em;letter-spacing:0;box-sizing:border-box}`,
   receipt: `@page{margin:0}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000}
     .rc{padding:3mm 2mm 6mm;box-sizing:border-box;font-size:10pt;page-break-after:always}

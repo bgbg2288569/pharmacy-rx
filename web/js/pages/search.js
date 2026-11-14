@@ -13,7 +13,7 @@ const STATUS_OPTS = [
   { v: 'closed', t: '已完成', p: { order_status: 'closed' } },
   { v: 'cancelled', t: '已取消', p: { order_status: 'cancelled' } },
 ];
-const blank = () => ({ keyword: '', hospital: '', dept_code: '', status: '', created_from: '', created_to: '', due_from: '', due_to: '', all_stores: false });
+const blank = () => ({ keyword: '', hospital: '', dept_code: '', dept_name: '', status: '', created_from: '', created_to: '', due_from: '', due_to: '', all_stores: false });
 
 export default {
   components: { RocDate, FillChip, NotifyPills, DeptInput },
@@ -25,15 +25,31 @@ export default {
     const sort = reactive({ key: 'created_at', dir: -1 });
     const kwEl = ref(null);
 
-    async function run() {
+    // 輸入條件即時查詢：停止輸入 0.35 秒後自動查；相同條件不重查；較慢回來的舊結果不覆蓋新結果
+    let timer = 0, seq = 0, lastKey = '';
+    const params = () => {
+      const { status, all_stores, ...rest } = f;
+      return { ...rest, ...(STATUS_OPTS.find(x => x.v === status)?.p || {}), store_id: all_stores && isAdmin() ? '' : state.storeId, limit: 1000 };
+    };
+    const hasCond = () => Object.entries(f).some(([k, v]) => k !== 'all_stores' && String(v ?? '').trim() !== '');
+    async function run(force = true) {
+      clearTimeout(timer);
+      const p = params();
+      const key = JSON.stringify(p);
+      if (!force && key === lastKey) return;
+      lastKey = key;
+      const my = ++seq;
       loading.value = true;
       try {
-        const { status, all_stores, ...rest } = f;
-        const p = { ...rest, ...(STATUS_OPTS.find(x => x.v === status)?.p || {}), store_id: all_stores && isAdmin() ? '' : state.storeId, limit: 1000 };
-        rows.value = await rpc('rx_search', { p });
-        searched.value = true;
-      } catch (e) { toastErr(e); } finally { loading.value = false; }
+        const r = await rpc('rx_search', { p });
+        if (my === seq) { rows.value = r; searched.value = true; }
+      } catch (e) { if (my === seq) toastErr(e); } finally { if (my === seq) loading.value = false; }
     }
+    watch(f, () => {
+      clearTimeout(timer);
+      if (!hasCond()) { seq++; lastKey = ''; rows.value = []; searched.value = false; loading.value = false; return; }
+      timer = setTimeout(() => run(false), 350);
+    }, { deep: true });
     function clear() { Object.assign(f, blank()); rows.value = []; searched.value = false; kwEl.value?.focus(); }
     function preset(k) {
       Object.assign(f, blank());
@@ -94,11 +110,11 @@ export default {
         <button class="chip" @click="preset('notify')">已預作待通知</button>
       </div>
     </div>
-    <div class="card qgrid" @keydown.enter="run">
+    <div class="card qgrid" @keydown.enter="run()">
       <div class="q kw"><label class="lbl">關鍵字 <span class="opt">姓名／電話／寄單編號／備註</span></label>
         <input ref="kwEl" class="inp" v-model="f.keyword" placeholder="例：王小明、0912、261113" autocomplete="off"></div>
       <div class="q hp"><label class="lbl">醫院 <span class="opt">名稱或院所代號</span></label><input class="inp" v-model="f.hospital" placeholder="例：台大、0401180014"></div>
-      <div class="q dp"><label class="lbl">科別</label><DeptInput v-model:code="f.dept_code" /></div>
+      <div class="q dp"><label class="lbl">科別</label><DeptInput v-model:code="f.dept_code" v-model:name="f.dept_name" /></div>
       <div class="q st"><label class="lbl">狀態</label>
         <select class="inp" v-model="f.status"><option v-for="o in STATUS_OPTS" :key="o.v" :value="o.v">{{o.t}}</option></select></div>
       <div class="q rg1"><label class="lbl">寄單日</label>
@@ -108,7 +124,7 @@ export default {
       <div class="q bt">
         <label v-if="isAdmin()" class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" v-model="f.all_stores">全部門市</label>
         <button class="btn ghost" @click="clear">清除條件</button>
-        <button class="btn fill" @click="run" :disabled="loading"><i class="sl"></i>查詢</button>
+        <button class="btn fill" @click="run()" :disabled="loading"><i class="sl"></i>查詢</button>
       </div>
     </div>
 
@@ -122,7 +138,7 @@ export default {
         <button class="btn sm" :disabled="!rows.length" @click="exportPrint">列印清單</button>
         <button class="btn sm" :disabled="!rows.length" @click="exportCsv">匯出 CSV</button>
       </div>
-      <div class="tbl fixed stbl" style="max-height:calc(100vh - 290px)"><table>
+      <div class="tbl fixed stbl" style="max-height:calc(100vh / var(--z,1) - 290px)"><table>
         <thead><tr>
           <th class="sort" v-if="f.all_stores" @click="by('store_name')">門市<span class="ar">{{ar('store_name')}}</span></th>
           <th class="sort" @click="by('created_at')">寄單時間<span class="ar">{{ar('created_at')}}</span></th>

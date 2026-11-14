@@ -120,7 +120,7 @@ export default {
         <button class="btn sm" v-if="tab==='done'" :disabled="!sel.size || busy" @click="batch('unnotify')">批次撤銷通知</button>
       </div>
       <p class="small muted" v-if="tab==='self'" style="margin:0 0 8px">只選「自取」的寄單不需通知，預作完成即結束；這裡列出已備妥的，方便客人來詢問時查找。</p>
-      <div class="tbl fixed" style="max-height:calc(100vh - 230px)"><table>
+      <div class="tbl fixed" style="max-height:calc(100vh / var(--z,1) - 230px)"><table>
         <thead><tr>
           <th style="width:36px" v-if="tab!=='self'"><input type="checkbox" :checked="allSel" @change="toggleAll"></th>
           <th>姓名</th><th>電話</th><th>通知方式</th><th>次數</th><th>領藥日</th><th>醫院／科別</th><th>同行家人</th><th>備註</th>

@@ -242,33 +242,42 @@ export const HospitalInput = {
 
 // ---------------------------------------------------------------- 科別
 export const DeptInput = {
-  props: { code: String },
+  props: { code: String, name: String },
   emits: ['update:code', 'update:name'],
   setup(props, { emit }) {
     const cur = () => state.depts.find(d => d.code === props.code);
-    const show = d => (d ? `${d.code} ${d.name}` : '');
-    const text = ref(show(cur()));
-    watch(() => [props.code, state.depts.length], () => { text.value = show(cur()); });
+    // 清單內科別顯示「代碼 名稱」；清單外（自行輸入）只顯示文字
+    const show = () => { const d = cur(); return d ? `${d.code} ${d.name}` : (props.name || ''); };
+    const text = ref(show());
+    watch(() => [props.code, props.name, state.depts.length], () => { text.value = show(); });
     const list = computed(() => {
       const s = text.value.trim().toUpperCase();
-      if (!s || s === show(cur()).toUpperCase()) return state.depts;
-      const exact = state.depts.filter(d => d.code.toUpperCase() === s);
-      return [...exact, ...state.depts.filter(d => d.code.toUpperCase() !== s && (d.code.toUpperCase().startsWith(s) || d.name.includes(text.value.trim())))];
+      if (!s || s === show().toUpperCase()) return state.depts;
+      const exact = state.depts.filter(d => d.code.toUpperCase() === s || d.name === text.value.trim());
+      return [...exact, ...state.depts.filter(d => !exact.includes(d) && (d.code.toUpperCase().startsWith(s) || d.name.includes(text.value.trim())))];
     });
-    function pick(d) { if (!d) return; text.value = show(d); emit('update:code', d.code); emit('update:name', d.name); }
+    const free = computed(() => !!text.value.trim() && !props.code && text.value.trim() === (props.name || ''));
+    function pick(d) { if (!d) return; text.value = `${d.code} ${d.name}`; emit('update:code', d.code); emit('update:name', d.name); }
     const L = useList(list, pick);
     function onBlur() {
       setTimeout(() => {
         L.open.value = false;
-        if (!text.value.trim()) { emit('update:code', ''); emit('update:name', ''); return; }
-        text.value = show(cur());
+        const t = text.value.trim();
+        if (!t) { emit('update:code', ''); emit('update:name', ''); return; }
+        if (t === show()) return;
+        // 完全符合代碼或名稱 → 用清單；否則保留文字（清單外科別）
+        const hit = state.depts.find(d => d.code.toUpperCase() === t.toUpperCase() || d.name === t || `${d.code} ${d.name}` === t);
+        if (hit) pick(hit);
+        else { emit('update:code', ''); emit('update:name', t); }
       }, 120);
     }
-    return { text, list, pick, onBlur, ...L };
+    return { text, list, pick, onBlur, free, ...L };
   },
   template: `<div style="position:relative">
-    <input class="inp" data-nav v-model="text" autocomplete="off" placeholder="代碼或名稱，例：02、AB、內科"
+    <input class="inp" data-nav v-model="text" autocomplete="off" placeholder="代碼或名稱，清單外可直接輸入"
+      :title="free ? '清單外科別（自行輸入）' : ''"
       @input="open=true" @click="open=true" @focus="$event.target.select()" @blur="onBlur" @keydown="onKey">
+    <span v-if="free" class="tiny muted" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none">清單外</span>
     <div class="dd" v-if="open && list.length">
       <div v-for="(d,i) in list" :key="d.code" class="it" :class="{on:i===idx}" @mousedown.prevent="pick(d); open=false">
         <span class="src q" style="min-width:28px;text-align:center">{{d.code}}</span><div class="grow t">{{d.name}}</div>
@@ -510,6 +519,7 @@ export const OrderForm = {
       if (!f.notify_methods.length) errs.notify = '請選擇通知方式';
       if (phoneReq.value && !f.phone) errs.phone = '簡訊／電話通知需填電話';
       if (f.phone && f.phone.length < 8) errs.phone = '電話位數不足';
+      if (/^09/.test(f.phone || '') && f.phone.length !== 10) errs.phone = '手機（09 開頭）須為 10 碼';
       if (f.birth_date && f.birth_date > todayISO()) errs.birth = '生日不能晚於今天';
       if (!f.dates.some(Boolean)) errs.dates = '請至少輸入一次領藥日期';
       const d = f.dates.filter(Boolean);

@@ -22,6 +22,24 @@ const ROUTES = [
 // Logo：橘色實心圓＋青綠圓環交疊（取自登入頁的兩個圓）
 const BRAND_SVG = `<svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="14.5" cy="24" r="10" fill="#ff9933"/><circle cx="25.5" cy="15.5" r="9" fill="none" stroke="#00d0c5" stroke-width="5"/></svg>`;
 
+// ---------------- 螢幕縮放 ----------------
+// 自動：以 1440×860 的版面為基準，依視窗寬高等比放大（最大 2 倍、不縮小）；也可手動指定
+const ZOOMS = [['auto', '自動'], [1, '100%'], [1.1, '110%'], [1.25, '125%'], [1.4, '140%'], [1.6, '160%'], [1.8, '180%']];
+const zoomMode = ref(ls.get('ui_zoom', 'auto'));
+function autoZoom() {
+  const z = Math.min(window.innerWidth / 1440, window.innerHeight / 860);
+  return Math.max(1, Math.min(2, Math.floor(z * 20) / 20));
+}
+function applyZoom() {
+  const z = zoomMode.value === 'auto' ? autoZoom() : Number(zoomMode.value) || 1;
+  const el = document.documentElement;
+  el.style.zoom = z === 1 ? '' : String(z);
+  el.style.setProperty('--z', String(z));
+}
+watch(zoomMode, v => { ls.set('ui_zoom', v); applyZoom(); });
+window.addEventListener('resize', () => { if (zoomMode.value === 'auto') applyZoom(); });
+applyZoom();
+
 const Login = {
   setup() {
     const account = ref(ls.get('last_account', ''));
@@ -104,7 +122,7 @@ const App = {
     onBeforeUnmount(() => { clearInterval(timer); window.removeEventListener('keydown', onKey); });
     watch(() => state.tick, () => refreshCounts());
 
-    return { state, routes, page, isAdmin, changeStore, logout, storeName, BRAND_SVG, CONFIG };
+    return { state, routes, page, isAdmin, changeStore, logout, storeName, BRAND_SVG, CONFIG, zoomMode, ZOOMS };
   },
   template: `
     <template v-if="!state.ready"><div class="login"><div class="card"><p class="muted">載入中…</p></div></div></template>
@@ -121,6 +139,8 @@ const App = {
             <option v-for="s in state.stores.filter(s=>s.active)" :key="s.id" :value="s.id">{{s.name}}</option></select>
           <span v-else class="pill store">{{storeName}}</span>
           <span class="muted">{{state.profile.display_name || state.profile.account}}</span>
+          <select class="zoomsel" v-model="zoomMode" title="畫面大小（自動會依螢幕大小調整）">
+            <option v-for="z in ZOOMS" :key="z[0]" :value="z[0]">{{z[0]==='auto' ? '畫面：自動' : '畫面：' + z[1]}}</option></select>
           <button class="btn xs" @click="logout">登出</button>
         </div>
       </div></nav>
