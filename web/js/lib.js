@@ -8,6 +8,11 @@ export const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
 });
 
 export const NOTIFY = ['LINE', '簡訊', '電話', '自取'];
+/** 藥局系統客戶備註（sa110.allergy）判斷通知方式：含 LINE → LINE、含「簡訊」→ 簡訊、含「電話」→ 電話 */
+export function notifyFromMemo(memo) {
+  const t = String(memo || '');
+  return NOTIFY.filter(m => (m === 'LINE' ? /line/i.test(t) : m !== '自取' && t.includes(m)));
+}
 export const NOTIFY_CLS = { LINE: 'line', 簡訊: 'sms', 電話: 'tel', 自取: 'self' };
 // 寄單流程到「已通知」結束（自取＝預作完成即結束），領藥回歸藥局系統
 export const FILL_STATUS = { pending: '寄放中', prepared: '已預作', notified: '已通知', picked: '已領取', cancelled: '已取消' };
