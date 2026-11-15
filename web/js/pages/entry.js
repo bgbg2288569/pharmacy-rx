@@ -26,7 +26,8 @@ export default {
     const open = id => { state.detailId = id; };
     const onSaved = r => { last.value = r; };
     function addFamily() { form.value?.startFamily(last.value); last.value = null; }
-    return { state, today, form, last, go, prepDate, rocOf, dtOf, timeOf, fmtNo, shortHosp, reprint, open, onSaved, addFamily };
+    function addSame() { form.value?.startSamePerson(last.value); last.value = null; }
+    return { state, today, form, last, go, prepDate, rocOf, dtOf, timeOf, fmtNo, shortHosp, reprint, open, onSaved, addFamily, addSame };
   },
   template: `<div class="wrap">
     <div class="page-head"><h2><i class="sl"></i>寄單輸入</h2>
@@ -41,6 +42,7 @@ export default {
         <div class="alert ok" v-if="last" style="margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <span>✓ 已寄單 <b class="num">{{fmtNo(last.order_no)}}</b> {{last.payload.patient_name}}</span>
           <span style="flex:1"></span>
+          <button class="btn sm teal" @click="addSame">🩺 ＋同一人其他科別</button>
           <button class="btn sm teal" @click="addFamily">👪 ＋寄同行家人（同一通知）</button>
           <button class="x" @click="last=null">✕</button>
         </div>

@@ -1,5 +1,22 @@
 @echo off
-REM ä»¥ã€Œç³»çµ±ç®¡ç†å“¡èº«åˆ†ã€åŸ·è¡Œä¸€æ¬¡ï¼Œå…è¨±ä¸€èˆ¬ä½¿ç”¨è€…å•Ÿå‹• RxBridge çš„æœ¬æ©Ÿæœå‹™
-netsh http add urlacl url=http://localhost:5880/ user=Everyone
-netsh http add urlacl url=http://127.0.0.1:5880/ user=Everyone
+REM RxBridge±H³æ¨t²Î¦ê±µ¡G¤¹³\¤@¯ë¨Ï¥ÎªÌ±Ò°Ê¥»¾÷ªA°È¡]¨C¥x¹q¸£¥H¡u¨t²ÎºÞ²z­û¨­¤À¡v°õ¦æ¤@¦¸¡^
+REM ¥Î SDDL¡]WD = Everyone ªº SID¡^³]©w¡A¤£¨ü¤¤¤å¡þ­^¤å Windows ¸s²Õ¦WºÙ¼vÅT
+
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+  echo.
+  echo  [¿ù»~] ½Ð¹ï³o­ÓÀÉ®×«ö¥kÁä¡A¿ï¡u¥H¨t²ÎºÞ²z­û¨­¤À°õ¦æ¡v
+  echo.
+  pause
+  exit /b 1
+)
+
+netsh http delete urlacl url=http://localhost:5880/ >nul 2>&1
+netsh http delete urlacl url=http://127.0.0.1:5880/ >nul 2>&1
+netsh http add urlacl url=http://localhost:5880/ sddl=D:(A;;GX;;;WD)
+netsh http add urlacl url=http://127.0.0.1:5880/ sddl=D:(A;;GX;;;WD)
+
+echo.
+echo  ³]©w§¹¦¨¡A½Ð­«·s¶}±Ò RxBridge±H³æ¨t²Î¦ê±µ
+echo.
 pause

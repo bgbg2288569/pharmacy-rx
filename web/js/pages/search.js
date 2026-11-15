@@ -34,7 +34,6 @@ export default {
       const { status, all_stores, ...rest } = f;
       return { ...rest, ...(STATUS_OPTS.find(x => x.v === status)?.p || {}), store_id: all_stores && isAdmin() ? '' : state.storeId, limit: 1000 };
     };
-    const hasCond = () => Object.entries(f).some(([k, v]) => k !== 'all_stores' && String(v ?? '').trim() !== '');
     async function run(force = true) {
       clearTimeout(timer);
       const p = params();
@@ -48,12 +47,12 @@ export default {
         if (my === seq) { rows.value = r; searched.value = true; }
       } catch (e) { if (my === seq) toastErr(e); } finally { if (my === seq) loading.value = false; }
     }
+    // 沒有任何條件時列出全部（含已取消），依寄單時間由新到舊
     watch(f, () => {
       clearTimeout(timer);
-      if (!hasCond()) { seq++; lastKey = ''; rows.value = []; searched.value = false; loading.value = false; return; }
       timer = setTimeout(() => run(false), 350);
     }, { deep: true });
-    function clear() { Object.assign(f, blank()); rows.value = []; searched.value = false; kwEl.value?.focus(); }
+    function clear() { Object.assign(f, blank()); kwEl.value?.focus(); }
     function preset(k) {
       Object.assign(f, blank());
       const t = todayISO();
@@ -100,8 +99,7 @@ export default {
     watch(() => state.storeId, () => { if (searched.value) run(); });
     onMounted(() => {
       kwEl.value?.focus();
-      if (!saved) preset('open');
-      else if (hasCond()) run();          // 回到本頁：用保留的條件重新查一次（取得最新資料）
+      run();                              // 預設「全部」（含已取消）；回到本頁時用保留的條件重新查一次
     });
     // 清單上快速補印貼紙（固定用 4×3 貼紙格式）
     function quickLabel(o) { printOrder(o, o.fills, 'label'); toast(`已送出補印貼紙：${o.patient_name}`, 'ok', 1500); }
@@ -112,6 +110,7 @@ export default {
   template: `<div class="wrap wide">
     <div class="page-head"><h2><i class="sl"></i>寄單查詢</h2><span class="sp"></span>
       <div class="chips">
+        <button class="chip" @click="preset('all')">全部</button>
         <button class="chip" @click="preset('open')">進行中</button>
         <button class="chip" @click="preset('today')">今日寄單</button>
         <button class="chip" @click="preset('prep')">預作日到期</button>

@@ -376,6 +376,7 @@ export async function bridgeMatch(idno, birth) {
   if (!u || state.bridge === 'off' || (!idno && !birth)) return [];
   try {
     const r = await fetch(`${u}/match?idno=${encodeURIComponent(idno || '')}&birth=${encodeURIComponent(birth || '')}`, { signal: AbortSignal.timeout(8000) });
+    if (r.status === 404) return [];       // 舊版 RxBridge（v1.5 以前）沒有 /match：不算斷線，只是查不到藥局系統資料
     if (!r.ok) throw new Error(r.status);
     state.bridge = 'ok';
     const rows = await r.json();

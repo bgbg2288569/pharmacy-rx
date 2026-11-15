@@ -113,23 +113,51 @@ const App = {
     const storeName = computed(() => state.stores.find(s => s.id === state.storeId)?.name || '');
 
     function onKey(e) { if (e.key === 'Escape' && !state.ask && state.detailId) state.detailId = null; }
-    let timer;
+
+    // ---- 閒置自動登出：4 小時沒有任何操作（滑鼠、鍵盤、掃描槍）就登出 ----
+    // 最後操作時間存在 localStorage，同一台電腦開多個分頁時共用；關掉瀏覽器隔天再開也會先檢查
+    const IDLE_MS = 4 * 60 * 60 * 1000;
+    const IDLE_KEY = 'rx_last_active';
+    let lastMark = 0;
+    const markActive = () => {
+      const now = Date.now();
+      if (now - lastMark < 30000) return;            // 每 30 秒最多寫一次
+      lastMark = now;
+      try { localStorage.setItem(IDLE_KEY, String(now)); } catch { /* 無痕模式等 */ }
+    };
+    const lastActive = () => { try { return Number(localStorage.getItem(IDLE_KEY)) || 0; } catch { return 0; } };
+    const idleExpired = () => { const t = lastActive(); return t > 0 && Date.now() - t > IDLE_MS; };
+    async function idleLogout() {
+      if (!state.user) return;
+      state.dirty = {};                              // 逾時登出不再詢問未儲存變更
+      await sb.auth.signOut().catch(() => {});
+      clearSession();
+      state.authMsg = '已閒置超過 4 小時，系統已自動登出，請重新登入。';
+    }
+    const checkIdle = () => { if (state.user && idleExpired()) idleLogout(); };
+    let timer, idleTimer;
     onMounted(async () => {
       readHash();
       installScanGuard();                 // 掃描槍防呆（中文輸入法亂碼、誤觸列印）
       window.addEventListener('hashchange', readHash);
       window.addEventListener('keydown', onKey);
       window.addEventListener('beforeunload', e => { if (hasUnsaved()) { e.preventDefault(); e.returnValue = ''; } });
+      for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) window.addEventListener(ev, markActive, { passive: true, capture: true });
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) checkIdle(); });
+      idleTimer = setInterval(checkIdle, 60000);
       const { data } = await sb.auth.getSession();
-      if (data.session) await afterLogin(data.session.user);
+      if (data.session && idleExpired()) {           // 上次操作已超過 4 小時：直接登出，不自動登入
+        await sb.auth.signOut().catch(() => {});
+        state.authMsg = '已閒置超過 4 小時，系統已自動登出，請重新登入。';
+      } else if (data.session) { markActive(); await afterLogin(data.session.user); }
       state.ready = true;
       sb.auth.onAuthStateChange((ev, session) => {
-        if (ev === 'SIGNED_IN' && session && session.user.id !== state.user?.id) afterLogin(session.user);
+        if (ev === 'SIGNED_IN' && session && session.user.id !== state.user?.id) { lastMark = 0; markActive(); afterLogin(session.user); }
         if (ev === 'SIGNED_OUT') clearSession();
       });
       timer = setInterval(refreshCounts, 60000);
     });
-    onBeforeUnmount(() => { clearInterval(timer); window.removeEventListener('keydown', onKey); });
+    onBeforeUnmount(() => { clearInterval(timer); clearInterval(idleTimer); window.removeEventListener('keydown', onKey); });
     watch(() => state.tick, () => refreshCounts());
 
     return { state, routes, page, isAdmin, changeStore, logout, storeName, BRAND_SVG, CONFIG, zoomMode, ZOOMS };

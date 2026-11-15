@@ -57,8 +57,8 @@ Module RxBridge
     Private Sub LoadConfig()
         Cfg("Port") = "5880"
         Cfg("Name") = "福原藥局"
-        Cfg("ConnectionString") = "DSN=ercrmis;UID=dba;ENP=2bf4d7163b8faf50e6e793f7f296ed57;"
-        Cfg("AllowedOrigins") = "*"
+        Cfg("ConnectionString") = ""                                  ' 帳密只放在 RxBridge.ini，不寫在程式裡
+        Cfg("AllowedOrigins") = "https://pharmacy-rx.linyaomedical.com"   ' 只允許寄單網站呼叫（ini 可改）
         Cfg("MaxRows") = "20"
         Cfg("QueryName") = "" : Cfg("QueryPhone") = "" : Cfg("QueryIdno") = "" : Cfg("QueryBirth") = ""
         Cfg("NamePattern") = "%{q}%"
@@ -139,6 +139,9 @@ Module RxBridge
     Private Sub Handle(ctx As HttpListenerContext)
         Dim req = ctx.Request, res = ctx.Response
         Try
+            ' 只接受用 localhost / 127.0.0.1 連進來的請求（防 DNS rebinding：惡意網域解析到 127.0.0.1）
+            Dim host = req.Url.Host.ToLowerInvariant()
+            If host <> "localhost" AndAlso host <> "127.0.0.1" Then Reply(res, 403, New With {.error = "host not allowed"}) : Return
             ' CORS + Chrome Private Network Access（https 網頁呼叫 localhost 需要）
             Dim origin = req.Headers("Origin")
             Dim allowed = Cfg("AllowedOrigins")
@@ -149,18 +152,19 @@ Module RxBridge
                 Reply(res, 403, New With {.error = "origin not allowed"}) : Return
             End If
             res.AddHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            res.AddHeader("Access-Control-Allow-Headers", "*")
+            res.AddHeader("Access-Control-Allow-Headers", "Content-Type")
             res.AddHeader("Access-Control-Allow-Private-Network", "true")
             If req.HttpMethod = "OPTIONS" Then res.StatusCode = 204 : res.Close() : Return
 
             Select Case req.Url.AbsolutePath.TrimEnd("/"c).ToLowerInvariant()
                 Case "/health"
-                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.5.1"})
+                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.6.0"})
                 Case "/patients"
                     ' 注意：不能用 req.QueryString —— .NET Framework 會用系統預設編碼（Big5）解碼網址，
                     ' 中文會變亂碼，送進 ODBC 後變成一串 ?，反而查到一堆含 ? 的姓名。這裡自己用 UTF-8 解碼。
                     Dim q = QueryParam(req.Url.Query, "q").Trim()
                     If q.Length = 0 Then Reply(res, 200, New List(Of Object)) : Return
+                    If q.Length > 30 Then q = q.Substring(0, 30)
                     Reply(res, 200, SearchPatients(q))
                 Case "/match"
                     ' 處方箋 QR 比對：idno 可含 *（隱碼），birth 為西元 yyyy-MM-dd，月／日可為 **
@@ -169,6 +173,11 @@ Module RxBridge
                     Reply(res, 200, MatchPatients(idno, birth))
                 Case "/print-label"
                     If req.HttpMethod <> "POST" Then Reply(res, 405, New With {.error = "請用 POST"}) : Return
+                    ' 一定要是 JSON（瀏覽器跨站送 JSON 會先做 CORS 預檢，不在允許清單的網站送不進來）
+                    If Not (If(req.ContentType, "")).StartsWith("application/json", StringComparison.OrdinalIgnoreCase) Then
+                        Reply(res, 415, New With {.error = "Content-Type 必須是 application/json"}) : Return
+                    End If
+                    If req.ContentLength64 > 65536 Then Reply(res, 413, New With {.error = "資料過大"}) : Return
                     Dim body As String
                     Using sr As New StreamReader(req.InputStream, Encoding.UTF8)
                         body = sr.ReadToEnd()

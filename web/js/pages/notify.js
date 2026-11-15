@@ -46,7 +46,9 @@ export default {
     const famReady = r => familyOf(r).every(x => x.fill_status !== 'pending');
     const t = todayISO();
     const lists = computed(() => ({
-      notify: rows.value.filter(r => r.fill_status === 'prepared' && !selfOnly(r.notify_methods)),
+      // 待通知：只列領藥日已到（今天或更早）的；預作好但領藥日未到的，到當天才出現
+      notify: rows.value.filter(r => r.fill_status === 'prepared' && !selfOnly(r.notify_methods) && r.due_date <= t),
+      later: rows.value.filter(r => r.fill_status === 'prepared' && !selfOnly(r.notify_methods) && r.due_date > t),
       self: rows.value.filter(r => r.fill_status === 'prepared' && selfOnly(r.notify_methods)),
       done: rows.value.filter(r => r.fill_status === 'notified').sort((a, b) => (a.notified_at < b.notified_at ? 1 : -1)),
     }));
@@ -92,7 +94,8 @@ export default {
     const batch = action => act(shown.value.filter(r => sel.value.has(r.fill_id)), action);
     async function switchOp() { const s = await askStaff('切換操作人員'); if (s) setOperator(s); }
     const open = id => { state.detailId = id; };
-    return { state, tab, method, kw, rows, lists, shown, sel, allSel, busy, toggleAll, toggleOne, act, notifyRow, batch, switchOp, msgOf, copyText,
+    const today = t;
+    return { today, state, tab, method, kw, rows, lists, shown, sel, allSel, busy, toggleAll, toggleOne, act, notifyRow, batch, switchOp, msgOf, copyText,
       open, familyOf, famReady, NOTIFY, CIRCLED, FILL_STATUS, rocOf, weekOf, fmtNo, dtOf, fullOf, shortHosp };
   },
   template: `<div class="wrap wide">
@@ -119,6 +122,8 @@ export default {
         <button class="btn sm fill" v-if="tab==='notify'" :disabled="!sel.size || busy" @click="batch('notify')">批次標記已通知</button>
         <button class="btn sm" v-if="tab==='done'" :disabled="!sel.size || busy" @click="batch('unnotify')">批次撤銷通知</button>
       </div>
+      <p class="small muted" v-if="tab==='notify'" style="margin:0 0 8px">列出領藥日為今天（{{rocOf(today)}}）及之前、已預作完成的處方。
+        <template v-if="lists.later.length">另有 <b>{{lists.later.length}}</b> 筆已預作、領藥日還沒到，到領藥日當天才會出現在這裡。</template></p>
       <p class="small muted" v-if="tab==='self'" style="margin:0 0 8px">只選「自取」的寄單不需通知，預作完成即結束；這裡列出已備妥的，方便客人來詢問時查找。</p>
       <div class="tbl fixed" style="max-height:calc(100vh / var(--z,1) - 230px)"><table>
         <thead><tr>

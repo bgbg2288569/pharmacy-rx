@@ -75,13 +75,13 @@ export default {
     const alarm = ref(null);          // { kind, title, sub, hint, fill }
     const ignored = ref(0);           // 警示期間被攔下的刷條碼次數
     let alarmTimer = 0;
-    function raiseAlarm(kind, title, sub, hint = '', fill = null) {
-      alarm.value = { kind, title, sub, hint, fill };
+    function raiseAlarm(kind, title, sub, hint = '', fill = null, icon = '', repeat = true) {
+      alarm.value = { kind, title, sub, hint, fill, icon };
       ignored.value = 0;
       scanEl.value?.blur();
       clearInterval(alarmTimer);
       beep('err');
-      alarmTimer = setInterval(() => beep('err'), 3000);   // 未解除前每 3 秒再響一次
+      if (repeat) alarmTimer = setInterval(() => beep('err'), 3000);   // 未解除前每 3 秒再響一次
     }
     function clearAlarm() { clearInterval(alarmTimer); alarm.value = null; focusScan(); }
     // 只接受真正的滑鼠點擊（鍵盤 Enter／空白鍵觸發的 click，detail 為 0，不算）
@@ -101,6 +101,20 @@ export default {
     onMounted(() => window.addEventListener('keydown', onKeyCapture, true));
     onUnmounted(() => { window.removeEventListener('keydown', onKeyCapture, true); clearInterval(alarmTimer); });
 
+    // 同一張寄單有兩次以上領藥日的「日」相同（例：11/24、12/24），實體藥袋會歸檔在同一格，容易拿錯 → 提醒核對處方日期
+    async function sameDayCheck(o, f) {
+      if (!f?.due_date || !(o?.id || f.order_id)) return;
+      try {
+        const fills = await q(sb.from('rx_fills').select('seq,due_date,status').eq('order_id', o.id || f.order_id).neq('status', 'cancelled'));
+        const dd = f.due_date.slice(8, 10);
+        const same = fills.filter(x => x.due_date && x.due_date.slice(8, 10) === dd).sort((a, b) => a.seq - b.seq);
+        if (same.length < 2 || alarm.value) return;
+        const n = same.length === 2 ? '兩' : same.length === 3 ? '三' : String(same.length);
+        const seqs = same.map(x => '第' + x.seq + '次 ' + mdOf(x.due_date)).join('、');
+        raiseAlarm('warn', `注意：${o.patient_name || ''} ${n}次預作日期相同`, seqs,
+          `${n}次預作日期相同，請確認手上處方日期是否為 ${mdOf(f.due_date)}`, null, '⚠', false);
+      } catch { /* 查不到就不提醒，不影響預作 */ }
+    }
     async function onScan() {
       if (alarm.value) return;
       const code = scan.value.replace(/\D/g, '');
@@ -120,7 +134,7 @@ export default {
         const who = `${o.patient_name || ''}　${f.seq ? '第' + f.seq + '次 ' + rocOf(f.due_date, true) : ''}`;
         const hd = `${shortHosp(o.hospital_code, o.hospital_name)} ${o.dept_name || ''}`;
         switch (r.result) {
-          case 'ok': show('ok', who, `${hd} · 已確認預作`); beep('ok'); pushRecent(who, 'ok'); flash(f.id); bump(); break;
+          case 'ok': show('ok', who, `${hd} · 已確認預作`); beep('ok'); pushRecent(who, 'ok'); flash(f.id); bump(); sameDayCheck(o, f); break;
           case 'already': {
             const t = `已確認過（${dtOf(f.prepared_at)} ${f.prepared_by || ''}）`;
             show('warn', who, t); pushRecent(who + ' 重複', 'warn'); flash(f.id);
@@ -128,7 +142,7 @@ export default {
           }
           case 'other_date': {
             const t = `領藥日不在 ${rocOf(range.from)}${range.to !== range.from ? '～' + rocOf(range.to) : ''} 清單內`;
-            show('warn', who, t); pendingConfirm.value = f; pushRecent(who + ' 日期不符', 'warn');
+            show('warn', who, t); pendingConfirm.value = { ...f, _name: o.patient_name }; pushRecent(who + ' 日期不符', 'warn');
             raiseAlarm('warn', '日期不符：' + who, `${hd} · ${t}`, '請確認是否拿錯日期的處方；確定要預作才按「仍要確認」', f); break;
           }
           case 'no_pending':
@@ -136,7 +150,7 @@ export default {
             raiseAlarm('err', '沒有待預作：' + o.patient_name, `${hd} · ${fmtNo(o.order_no)}`, '這張寄單的每一次都已預作或已通知，請確認這包藥'); break;
           case 'cancelled':
             show('err', o.patient_name, '此寄單已取消'); pushRecent(o.patient_name + ' 已取消', 'err');
-            raiseAlarm('err', '已取消的寄單：' + o.patient_name, `${hd} · ${fmtNo(o.order_no)}`, '這張寄單已經取消，請勿預作，把這包藥抽出來'); break;
+            raiseAlarm('err', '已取消的寄單：' + o.patient_name, `${hd} · ${fmtNo(o.order_no)}`, '此張寄單已經取消，請勿預作'); break;
           case 'other_store':
             show('err', r.patient_name, `這是其他門市（${r.store_id}）的寄單`); pushRecent((r.patient_name || '') + ' 他店', 'err');
             raiseAlarm('err', '其他門市的寄單：' + (r.patient_name || ''), `門市 ${r.store_id} · ${fmtNo(code)}`, '請把這包藥抽出來，交回所屬門市'); break;
@@ -152,6 +166,7 @@ export default {
       try {
         await rpc('rx_fill_action', { p_fill_id: f.id, p_action: 'prepare', p_staff: op.code, p_extra: { force_date: true } });
         show('ok', '已確認（日期不同）', `第${f.seq}次 ${rocOf(f.due_date, true)}`); beep('ok'); pendingConfirm.value = null; bump();
+        sameDayCheck({ id: f.order_id, patient_name: f._name }, f);
       } catch (e) { toastErr(e); }
       focusScan();
     }
@@ -163,7 +178,7 @@ export default {
       try {
         await rpc('rx_fill_action', { p_fill_id: r.fill_id, p_action: action, p_staff: op.code, p_extra: action === 'prepare' ? { from_prep: true } : {} });
         r.fill_status = action === 'prepare' ? 'prepared' : 'pending';
-        if (action === 'prepare') { beep('ok'); flash(r.fill_id); }
+        if (action === 'prepare') { beep('ok'); flash(r.fill_id); sameDayCheck({ id: r.order_id, patient_name: r.patient_name }, { order_id: r.order_id, due_date: r.due_date }); }
         bump();
       } catch (e) { toastErr(e); }
       focusScan();
@@ -270,7 +285,7 @@ export default {
   
     <div class="mask alarm-mask" v-if="alarm">
       <div class="modal alarm" :class="alarm.kind" role="alertdialog">
-        <div class="al-ic">{{ alarm.kind === 'err' ? '✕' : '!' }}</div>
+        <div class="al-ic">{{ alarm.icon || (alarm.kind === 'err' ? '✕' : '!') }}</div>
         <div class="al-title">{{alarm.title}}</div>
         <div class="al-sub">{{alarm.sub}}</div>
         <div class="al-hint" v-if="alarm.hint">{{alarm.hint}}</div>

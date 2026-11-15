@@ -177,6 +177,12 @@ language sql stable security definer set search_path = public as $$
   select store_id from rx_users where id = auth.uid() and active;
 $$;
 
+-- 是否為寄單系統的有效帳號（同一個 Supabase 專案的其他系統使用者不算）
+create or replace function rx_is_member() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from rx_users where id = auth.uid() and active);
+$$;
+
 create or replace function rx_can_store(p_store text) returns boolean
 language sql stable security definer set search_path = public as $$
   select rx_is_admin() or (p_store is not null and p_store = rx_my_store());
@@ -243,6 +249,8 @@ returns table (code text, name text)
 language sql stable security definer set search_path = public as $$
   select s.code, s.name from rx_staff s
   where s.active and s.code = trim(p_code) and (s.store_id = p_store or s.store_id is null)
+    -- 登入者只能查自己門市的人員；調劑系統串接（anon、無 auth.uid）由 rx_intake 先以 API 金鑰驗證門市
+    and (auth.uid() is null or rx_can_store(p_store))
   order by s.store_id nulls last limit 1;
 $$;
 
@@ -611,6 +619,8 @@ declare v_store text := nullif(p->>'store_id', ''); v_limit int := least(coalesc
         kw text := nullif(trim(coalesce(p->>'keyword', '')), '');
 begin
   if v_store is null and not rx_is_admin() then v_store := rx_my_store(); end if;
+  -- 非管理員一定要有門市（避免未指定門市或其他系統的帳號查到全部門市）
+  if v_store is null and not rx_is_admin() then raise exception '沒有此門市的權限'; end if;
   if v_store is not null and not rx_can_store(v_store) then raise exception '沒有此門市的權限'; end if;
 
   return query
@@ -739,7 +749,8 @@ begin
                          and f.due_date between p_prep_from and p_prep_to),
     'late_pending', (select count(*) from rx_fills where store_id = p_store and status = 'pending' and due_date < p_prep_from),
     'to_notify',    (select count(*) from rx_fills f join rx_orders o on o.id = f.order_id
-                       where f.store_id = p_store and f.status = 'prepared' and not ('自取' = any(o.notify_methods) and cardinality(o.notify_methods) = 1)),
+                       where f.store_id = p_store and f.status = 'prepared' and f.due_date <= today
+                         and not ('自取' = any(o.notify_methods) and cardinality(o.notify_methods) = 1)),
     'notified_today', (select count(*) from rx_fills where store_id = p_store and status = 'notified'
                        and notified_at >= today::timestamp at time zone 'Asia/Taipei')
   );
@@ -764,6 +775,11 @@ declare allowed text[] := array['notify_template','bridge_url','prep_days_ahead'
         clean jsonb := '{}'::jsonb; k text;
 begin
   if not rx_can_store(p_store) then raise exception '沒有此門市的權限'; end if;
+  -- 藥局系統連線只允許本機（RxBridge 只在櫃台電腦本機執行），避免病人查詢被導到外部網址
+  if coalesce(p_settings->>'bridge_url', '') <> ''
+     and (p_settings->>'bridge_url') !~ '^http://(localhost|127\.0\.0\.1)(:[0-9]{2,5})?/?$' then
+    raise exception '藥局系統連線網址只能是 http://localhost:埠號 或 http://127.0.0.1:埠號';
+  end if;
   for k in select jsonb_object_keys(p_settings) loop
     if rx_is_admin() or k = any(allowed) then clean := clean || jsonb_build_object(k, p_settings->k); end if;
   end loop;
@@ -798,29 +814,29 @@ begin
 end $$;
 
 -- 基本資料：登入即可讀，管理員可寫
-create policy rx_stores_r on rx_stores for select to authenticated using (true);
+create policy rx_stores_r on rx_stores for select to authenticated using (rx_is_member());
 create policy rx_stores_w on rx_stores for all to authenticated using (rx_is_admin()) with check (rx_is_admin());
 
 create policy rx_users_r on rx_users for select to authenticated using (id = auth.uid() or rx_is_admin());
 create policy rx_users_w on rx_users for all to authenticated using (rx_is_admin()) with check (rx_is_admin());
 
-create policy rx_staff_r on rx_staff for select to authenticated using (store_id is null or rx_can_store(store_id));
+create policy rx_staff_r on rx_staff for select to authenticated using (rx_is_member() and (store_id is null or rx_can_store(store_id)));
 create policy rx_staff_w on rx_staff for all to authenticated using (rx_is_admin()) with check (rx_is_admin());
 
-create policy rx_hosp_r on rx_hospitals for select to authenticated using (true);
+create policy rx_hosp_r on rx_hospitals for select to authenticated using (rx_is_member());
 create policy rx_hosp_w on rx_hospitals for all to authenticated using (rx_is_admin()) with check (rx_is_admin());
 
-create policy rx_dept_r on rx_departments for select to authenticated using (true);
+create policy rx_dept_r on rx_departments for select to authenticated using (rx_is_member());
 create policy rx_dept_w on rx_departments for all to authenticated using (rx_is_admin()) with check (rx_is_admin());
 
-create policy rx_settings_r on rx_settings for select to authenticated using (true);
+create policy rx_settings_r on rx_settings for select to authenticated using (rx_is_member());
 create policy rx_settings_w on rx_settings for all to authenticated using (rx_is_admin()) with check (rx_is_admin());
 
 -- 門市自行維護：常用醫院、片語（全域片語僅管理員）
 create policy rx_quick_r on rx_hospital_quick for select to authenticated using (rx_can_store(store_id));
 create policy rx_quick_w on rx_hospital_quick for all to authenticated using (rx_can_store(store_id)) with check (rx_can_store(store_id));
 
-create policy rx_phr_r on rx_phrases for select to authenticated using (store_id is null or rx_can_store(store_id));
+create policy rx_phr_r on rx_phrases for select to authenticated using (rx_is_member() and (store_id is null or rx_can_store(store_id)));
 create policy rx_phr_w on rx_phrases for all to authenticated
   using ((store_id is null and rx_is_admin()) or (store_id is not null and rx_can_store(store_id)))
   with check ((store_id is null and rx_is_admin()) or (store_id is not null and rx_can_store(store_id)));
@@ -1070,13 +1086,15 @@ language sql stable security definer set search_path = public as $$
   from rx_orders o where o.id = p_id;
 $$;
 
--- RPC 權限：只給登入者（只處理 rx_ 函式，不影響同專案其他系統）
+-- RPC 權限：先把所有 rx_ 函式從 public / anon / authenticated 收回，再只開放前端需要的
+-- （Supabase 預設會把新函式直接授權給 authenticated；同專案其他系統的登入者也是 authenticated，
+--   所以內部函式如 rx_create_order_core、rx_intake_result 一定要收回，否則可跨門市讀寫）
 do $$
 declare r record;
 begin
   for r in select p.oid::regprocedure as sig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'rx\_%' loop
-    execute format('revoke execute on function %s from public, anon', r.sig);
+    execute format('revoke execute on function %s from public, anon, authenticated', r.sig);
   end loop;
 end $$;
 grant execute on function rx_create_order(jsonb, text), rx_update_order(bigint, jsonb, text),
@@ -1084,12 +1102,33 @@ grant execute on function rx_create_order(jsonb, text), rx_update_order(bigint, 
   rx_scan(text, text, date, date, text), rx_search(jsonb), rx_patient_suggest(text, text), rx_patient_match(text, text, text[], text[]),
   rx_dashboard(text, date, date, int), rx_update_store_settings(text, jsonb), rx_due_counts(text, date, date),
   rx_link_family(bigint, bigint, text), rx_unlink_family(bigint, text),
-  rx_resolve_staff(text, text), rx_is_admin(), rx_my_store(), rx_can_store(text),
+  rx_resolve_staff(text, text), rx_is_admin(), rx_is_member(), rx_my_store(), rx_can_store(text),
   rx_luhn(text), rx_valid_order_no(text), rx_api_key_create(text, text)
 to authenticated;
 -- 調劑系統（anon key）只能呼叫 rx_intake，函式內部以門市 API 金鑰驗證
 grant execute on function rx_intake(text, jsonb, boolean) to anon, authenticated;
+
+-- 資料表權限：anon（未登入）完全不能碰 rx_ 資料表；寄單資料只能經由 RPC 寫入
+do $$
+declare r record;
+begin
+  for r in select c.relname, c.relkind from pg_class c join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public' and c.relname like 'rx\_%' and c.relkind in ('r','v','m','S') loop
+    if r.relkind = 'S' then
+      execute format('revoke all on sequence %I from anon', r.relname);
+    else
+      execute format('revoke all on table %I from anon', r.relname);
+      execute format('revoke truncate, references, trigger on table %I from authenticated', r.relname);
+    end if;
+  end loop;
+end $$;
+revoke insert, update, delete on rx_orders, rx_fills, rx_logs, rx_counters from authenticated;
+revoke insert, delete on rx_api_keys from authenticated;
 grant select on rx_fill_view to authenticated;
+
+-- 匯入用的暫存表（含病人資料）用完就刪掉
+drop table if exists rx_import_old;
+drop table if exists rx_import_mid;
 
 -- ---------------------------------------------------------------------
 -- 10. 預設資料（請依實際門市修改）

@@ -383,7 +383,7 @@ export const OrderForm = {
     // 新增模式使用全域暫存（切換頁面不會遺失）；修改模式用各自的表單
     if (!props.order && !state.draft) state.draft = emptyForm();
     const f = props.order ? reactive(emptyForm()) : state.draft;
-    const family = computed({ get: () => f._family, set: v => { f._family = v; } });   // 同行家人 { order_no, patient_name }
+    const family = computed({ get: () => f._family, set: v => { f._family = v; } });   // 同行家人 { order_no, patient_name, same? }（same = 同一人其他科別）
     const saving = ref(false);
     const errs = reactive({});
     const sugg = ref([]);
@@ -579,7 +579,7 @@ export const OrderForm = {
       if (!n) { openOrders.value = []; return; }
       try {
         const rows = await q(sb.from('rx_fill_view')
-          .select('order_id,order_no,seq,due_date,fill_status,phone,birth_date,hospital_code,hospital_name,dept_name,created_at')
+          .select('order_id,order_no,family_no,seq,due_date,fill_status,phone,birth_date,hospital_code,hospital_name,dept_name,created_at')
           .eq('store_id', state.storeId).eq('patient_name', n).in('fill_status', ['pending', 'prepared', 'notified'])
           .gte('due_date', addDays(todayISO(), -14)).order('due_date').limit(30));
         const mine = rows.filter(r => !props.order || r.order_id !== props.order.id)
@@ -587,7 +587,7 @@ export const OrderForm = {
           .filter(r => f.birth_date || !f.phone || !r.phone || r.phone === f.phone);
         const by = {};
         for (const r of mine) {
-          (by[r.order_id] ||= { order_id: r.order_id, order_no: r.order_no, birth_date: r.birth_date, hosp: shortHosp(r.hospital_code, r.hospital_name), dept: r.dept_name, fills: [] })
+          (by[r.order_id] ||= { order_id: r.order_id, order_no: r.order_no, family_no: r.family_no, birth_date: r.birth_date, hosp: shortHosp(r.hospital_code, r.hospital_name), dept: r.dept_name, fills: [] })
             .fills.push({ seq: r.seq, due_date: r.due_date, status: r.fill_status });
         }
         openOrders.value = Object.values(by);
@@ -704,7 +704,25 @@ export const OrderForm = {
       f.phone = prev.payload.phone || '';
       f.notify_methods = [...prev.payload.notify_methods];
     }
-    expose({ startFamily, reset });
+    // 同一人其他科別：帶入同一位病人的資料（姓名、生日、電話、通知、醫院），清空科別與日期，並綁定一起通知
+    function startSamePerson(prev) {
+      const x = prev.payload;
+      reset();
+      family.value = { order_no: prev.family_no, patient_name: x.patient_name, dept: x.dept_name, same: true };
+      Object.assign(f, {
+        patient_name: x.patient_name || '', birth_date: x.birth_date || '', phone: x.phone || '',
+        notify_methods: [...(x.notify_methods || [])], ext_patient_id: x.ext_patient_id || '',
+        hospital_code: x.hospital_code || '', hospital_name: x.hospital_name || '',
+      });
+      suggOpen.value = false; qrMode.value = false;
+      nextTick(() => root.value?.querySelector('[data-k=dept] input')?.focus());
+    }
+    // 未完成寄單提示中點「綁定」：這張新寄單與該筆（同一人其他科別）一起通知
+    function bindSame(o) {
+      family.value = { order_no: o.family_no || o.order_no, patient_name: f.patient_name, dept: o.dept, same: true };
+      toast(`已綁定 ${o.dept || ''} 寄單，預作完成後一起通知`, 'ok', 2000);
+    }
+    expose({ startFamily, startSamePerson, reset });
 
     function onHotkey(e) {
       if (state.ask || (!edit.value && state.detailId)) return;
@@ -721,7 +739,7 @@ export const OrderForm = {
     onBeforeUnmount(() => window.removeEventListener('keydown', onHotkey));
 
     return {
-      qr, qrMode,
+      qr, qrMode, bindSame,
       extPhones, extLoading, extMemo, state, root, nameEl, f, family, errs, saving, sugg, suggOpen, suggIdx, openOrders, sameNameOther, edit, printMode, PRINT_MODES,
       phoneReq, quickDepts, fillOf, onBtnKey, NOTIFY_CLS, onPhone, onName, pickSugg, onNameKey, onNameBlur, hasPhrase, togglePhrase, onHospPick, pickQuick,
       pickDept, onFormKey, save, reset, checkOpen, FILL_STATUS, fmtNo, dayOf, rocOf, shortHosp, birthOf, ageOf, fullOf, emit,
@@ -782,7 +800,9 @@ export const OrderForm = {
       </div>
 
       <div class="fld c12" v-if="family">
-        <div class="alert ok">與 <b>{{family.patient_name}}</b>（{{fmtNo(family.order_no)}}）同行，預作完成後會一起通知
+        <div class="alert ok" v-if="family.same">🩺 與 <b>{{family.patient_name}}</b> 的 <b>{{family.dept || '其他科別'}}</b> 寄單（{{fmtNo(family.order_no)}}）綁定為同一人多科別，預作完成後會一起通知
+          <button class="linkbtn" style="margin-left:8px" @click="family=null">取消綁定</button></div>
+        <div class="alert ok" v-else>與 <b>{{family.patient_name}}</b>（{{fmtNo(family.order_no)}}）同行，預作完成後會一起通知
           <button class="linkbtn" style="margin-left:8px" @click="family=null">取消同行</button></div>
       </div>
       <div class="fld c12" v-if="openOrders.length">
@@ -797,6 +817,10 @@ export const OrderForm = {
               <td><b>{{o.dept || '—'}}</b></td>
               <td><span v-for="x in o.fills" :key="x.seq" class="fc" :class="x.status" style="margin-right:4px">
                 <span class="s sq" :class="'sq'+x.seq">{{x.seq}}</span><span class="num">{{rocOf(x.due_date)}}</span><span class="tiny">{{FILL_STATUS[x.status]}}</span></span></td>
+              <td v-if="!edit" style="text-align:right">
+                <span class="tiny" v-if="family && family.order_no === (o.family_no || o.order_no)" style="color:var(--teal-ink,#0a7)">✓ 已綁定</span>
+                <button v-else type="button" class="btn xs teal" tabindex="-1" title="同一人在其他科別的寄單，綁定後預作完成會一起通知"
+                  @click.stop="bindSame(o)">🔗 綁定一起通知</button></td>
             </tr>
           </table>
         </div>
@@ -814,7 +838,7 @@ export const OrderForm = {
           <span class="opt" style="color:var(--orange-ink)" v-else-if="f.hospital_name">清單外醫院</span></label>
         <HospitalInput v-model:code="f.hospital_code" v-model:name="f.hospital_name" @pick="onHospPick" />
       </div>
-      <div class="fld c5">
+      <div class="fld c5" data-k="dept">
         <label>科別 <span class="opt">科別代碼／名稱</span></label>
         <DeptInput v-model:code="f.dept_code" v-model:name="f.dept_name" placeholder="" />
       </div>
@@ -942,23 +966,35 @@ export const OrderDetail = {
     const linking = ref(false);
     const linkQ = ref('');
     const linkRows = ref([]);
+    // 同一人：姓名相同且生日相符（含隱碼），或藥局客戶代號相同
+    const isSame = r => r.patient_name === o.value.patient_name &&
+      ((o.value.ext_patient_id && r.ext_patient_id === o.value.ext_patient_id) || birthMatch(o.value.birth_date, r.birth_date));
     async function findLink() {
       const w = cleanQ(linkQ.value);
+      const base = () => sb.from('rx_orders').select('*, fills:rx_fills(*)').eq('store_id', o.value.store_id).neq('status', 'cancelled').neq('id', o.value.id);
       try {
-        let b = sb.from('rx_orders').select('*, fills:rx_fills(*)').eq('store_id', o.value.store_id).neq('status', 'cancelled').neq('id', o.value.id);
-        if (w) b = b.or(`patient_name.ilike.%${w}%,phone.like.${w}%,order_no.like.${w.replace(/-/g, '')}%`);
-        else if (o.value.phone) b = b.eq('phone', o.value.phone);         // 預設列出同電話的寄單（家人常共用電話）
-        else { linkRows.value = []; return; }
-        const rows = await q(b.order('created_at', { ascending: false }).limit(20));
-        linkRows.value = rows.filter(r => !o.value.family_no || r.family_no !== o.value.family_no);
+        let rows;
+        if (w) rows = await q(base().or(`patient_name.ilike.%${w}%,phone.like.${w}%,order_no.like.${w.replace(/-/g, '')}%`).order('created_at', { ascending: false }).limit(20));
+        else {
+          // 預設：同一人的其他寄單（多科別）＋同電話的寄單（家人常共用電話）
+          const [same, tel] = await Promise.all([
+            q(base().eq('patient_name', o.value.patient_name).order('created_at', { ascending: false }).limit(20)),
+            o.value.phone ? q(base().eq('phone', o.value.phone).order('created_at', { ascending: false }).limit(20)) : [],
+          ]);
+          const seen = new Set();
+          rows = [...same.filter(isSame), ...tel].filter(r => !seen.has(r.id) && seen.add(r.id));
+        }
+        linkRows.value = rows.filter(r => !o.value.family_no || r.family_no !== o.value.family_no)
+          .map(r => ({ ...r, _same: isSame(r) })).sort((a, b) => b._same - a._same);
       } catch (e) { toastErr(e); }
     }
     const findLinkD = debounce(findLink, 250);
     function startLink() { linking.value = true; linkQ.value = ''; findLink(); }
     async function linkTo(r) {
-      const s = await askStaff(`連結 ${o.value.patient_name} ＋ ${r.patient_name} 為同行家人`);
+      const what = r._same ? `${o.value.patient_name} 的 ${o.value.dept_name || '本筆'} ＋ ${r.dept_name || '其他科別'} 寄單（同一人多科別）` : `${o.value.patient_name} ＋ ${r.patient_name} 為同行家人`;
+      const s = await askStaff(`連結 ${what}`);
       if (!s) return;
-      try { await rpc('rx_link_family', { p_order: o.value.id, p_target: r.id, p_staff: s.code }); toast('已連結同行家人', 'ok'); bump(); }
+      try { await rpc('rx_link_family', { p_order: o.value.id, p_target: r.id, p_staff: s.code }); toast(r._same ? '已綁定同一人多科別' : '已連結同行家人', 'ok'); bump(); }
       catch (e) { toastErr(e); }
     }
     async function unlink() {
@@ -1032,25 +1068,25 @@ export const OrderDetail = {
         </dl>
 
         <div class="famblock">
-          <div class="btns" style="margin-bottom:6px"><b>👪 同行家人</b><span style="flex:1"></span>
-            <button class="btn xs" v-if="o.status!=='cancelled' && !linking" @click="startLink">＋連結同行家人</button>
+          <div class="btns" style="margin-bottom:6px"><b>👪 同行家人／同一人多科別</b><span style="flex:1"></span>
+            <button class="btn xs" v-if="o.status!=='cancelled' && !linking" @click="startLink">＋連結家人或同一人其他寄單</button>
             <button class="btn xs danger" v-if="o.family_no" @click="unlink">解除本筆同行</button></div>
           <div class="fam" v-for="x in fam" :key="x.id" @click="open(x.id)">
-            <b>{{x.patient_name}}</b>
+            <b>{{x.patient_name}}</b><span class="pill regular" v-if="x.patient_name===o.patient_name">同一人</span>
             <span class="small">{{shortHosp(x.hospital_code, x.hospital_name) || '—'}}｜{{x.dept_name || '—'}}</span>
             <span style="display:flex;gap:4px"><FillChip v-for="f in sortedFills(x)" :key="f.id" :f="f" show-status /></span>
           </div>
-          <div class="small muted" v-if="!fam.length && !linking">尚未連結。家人分開寄單或當下沒有一起打，可在這裡事後連結。</div>
+          <div class="small muted" v-if="!fam.length && !linking">尚未連結。家人分開寄單、或同一人在不同科別的寄單，可在這裡事後連結，預作完成後一起通知。</div>
           <div v-if="linking" class="linkbox">
-            <div class="inline"><input class="inp" v-model="linkQ" @input="findLinkD" placeholder="搜尋家人姓名／電話／寄單編號（預設列出同電話）">
+            <div class="inline"><input class="inp" v-model="linkQ" @input="findLinkD" placeholder="搜尋姓名／電話／寄單編號（預設列出同一人其他寄單與同電話）">
               <button class="x" @click="linking=false">取消</button></div>
             <div class="fam pick" v-for="r in linkRows" :key="r.id" @click="linkTo(r)">
-              <b>{{r.patient_name}}</b><span class="num small muted">{{r.phone}}</span>
+              <b>{{r.patient_name}}</b><span class="pill regular" v-if="r._same">同一人</span><span class="num small muted">{{r.phone}}</span>
               <span class="small">{{shortHosp(r.hospital_code, r.hospital_name) || '—'}}｜{{r.dept_name || '—'}}</span>
               <span style="display:flex;gap:4px"><FillChip v-for="f in sortedFills(r)" :key="f.id" :f="f" /></span>
               <span class="tiny" v-if="r.family_no" style="color:var(--orange-ink)">已有同行群組，會合併</span>
             </div>
-            <div class="small muted" v-if="!linkRows.length" style="padding:6px 2px">{{ linkQ ? '找不到符合的寄單' : '沒有同電話的寄單，請輸入姓名搜尋' }}</div>
+            <div class="small muted" v-if="!linkRows.length" style="padding:6px 2px">{{ linkQ ? '找不到符合的寄單' : '沒有同一人或同電話的寄單，請輸入姓名搜尋' }}</div>
           </div>
         </div>
 
