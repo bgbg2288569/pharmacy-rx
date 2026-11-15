@@ -1,7 +1,7 @@
 // 處方寄單系統 — 主程式（登入、導覽、路由）
 import { createApp, ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { CONFIG } from './config.js';
-import { sb, state, q, isAdmin, loadCommon, loadStoreData, refreshCounts, toastErr, ls, cleanErr, confirmLeave, hasUnsaved } from './lib.js';
+import { sb, state, q, isAdmin, loadCommon, loadStoreData, refreshCounts, toastErr, ls, cleanErr, confirmLeave, hasUnsaved, installScanGuard } from './lib.js';
 import { StaffPrompt, OrderDetail, ConfirmModal } from './components.js';
 import EntryPage from './pages/entry.js';
 import SearchPage from './pages/search.js';
@@ -116,6 +116,7 @@ const App = {
     let timer;
     onMounted(async () => {
       readHash();
+      installScanGuard();                 // 掃描槍防呆（中文輸入法亂碼、誤觸列印）
       window.addEventListener('hashchange', readHash);
       window.addEventListener('keydown', onKey);
       window.addEventListener('beforeunload', e => { if (hasUnsaved()) { e.preventDefault(); e.returnValue = ''; } });

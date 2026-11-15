@@ -155,7 +155,7 @@ Module RxBridge
 
             Select Case req.Url.AbsolutePath.TrimEnd("/"c).ToLowerInvariant()
                 Case "/health"
-                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.5.0"})
+                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.5.1"})
                 Case "/patients"
                     ' 注意：不能用 req.QueryString —— .NET Framework 會用系統預設編碼（Big5）解碼網址，
                     ' 中文會變亂碼，送進 ODBC 後變成一串 ?，反而查到一堆含 ? 的姓名。這裡自己用 UTF-8 解碼。
@@ -254,52 +254,71 @@ Module RxBridge
 
     ' ---------------------------------------------------------------- 處方箋 QR 比對
     ' idno：A123456789（完整）或 A123***481（* 為隱碼）；birth：1966-03-26 或 1966-**-26
-    '   身分證完整 → QueryIdno（精確）
-    '   身分證有隱碼 → QueryMatch（idno LIKE ? AND birthday LIKE ?），隱碼換成 _，沒有生日時生日帶 %
-    '   只有生日（完整）→ QueryBirth；生日有隱碼 → QueryMatch，身分證帶 %
+    ' 不在 SQL 用 LIKE 比對生日（birthday 可能是日期型態，LIKE 會查不到），改成：
+    '   身分證完整 → QueryIdno（精確）；查不到再用生日
+    '   生日完整 → QueryBirth（和手動輸入生日相同，精確比對）
+    '   生日有隱碼 → QueryBirthRange（birthday >= ? AND birthday <= ?，整年或整月）
+    '   只有身分證隱碼 → QueryIdnoPrefix（idno LIKE 'A123%'，隱碼前的字）
+    ' 查回來後在程式裡用隱碼規則過濾；有身分證相符的只留相符者，都不相符時保留生日相符的（藥局身分證可能沒建檔）
     Private ReadOnly IdnoMaskRx As New Regex("^[A-Z*][A-D0-9*][0-9*]{8}$")
     Private ReadOnly BirthMaskRx As New Regex("^(\d{4})-(\d{2}|\*\*)-(\d{2}|\*\*)$")
     Private Function MatchPatients(idno As String, birth As String) As List(Of Dictionary(Of String, Object))
-        Dim result As New List(Of Dictionary(Of String, Object))
+        Dim max = Math.Max(1, Math.Min(200, CInt(Val(Cfg("MaxRows")))))
         If Not IdnoMaskRx.IsMatch(idno) OrElse idno.Count(Function(c) c = "*"c) > 6 Then idno = ""
         Dim bm = BirthMaskRx.Match(birth)
-        Dim birthFull = "", birthLike = "%"
+        Dim yy = 0, bmo = 0, bd = 0     ' 0 = 隱碼
         If bm.Success Then
-            If bm.Groups(2).Value <> "**" AndAlso bm.Groups(3).Value <> "**" Then
-                birthFull = $"{bm.Groups(1).Value}/{bm.Groups(2).Value}/{bm.Groups(3).Value}"
-            End If
-            ' 分隔符號也用 _，不論藥局系統存 1966/03/26 或 1966-03-26 都比對得到
-            birthLike = $"{bm.Groups(1).Value}_{bm.Groups(2).Value.Replace("*", "_")}_{bm.Groups(3).Value.Replace("*", "_")}"
+            yy = CInt(bm.Groups(1).Value)
+            If bm.Groups(2).Value <> "**" Then bmo = CInt(bm.Groups(2).Value)
+            If bm.Groups(3).Value <> "**" Then bd = CInt(bm.Groups(3).Value)
+            If yy < 1880 OrElse yy > Date.Today.Year OrElse bmo > 12 OrElse bd > 31 Then yy = 0
         End If
-        If idno = "" AndAlso birthLike = "%" Then Return result
+        Dim hasBirth = yy > 0
+        If idno = "" AndAlso Not hasBirth Then Return New List(Of Dictionary(Of String, Object))
 
-        Dim jobKey As String, ps As String()
-        If idno <> "" AndAlso Not idno.Contains("*") Then
-            jobKey = "QueryIdno" : ps = {idno}
-        ElseIf idno <> "" Then
-            jobKey = "QueryMatch" : ps = {idno.Replace("*", "_"), birthLike}
-        ElseIf birthFull <> "" Then
-            jobKey = "QueryBirth" : ps = {birthFull}
-        Else
-            jobKey = "QueryMatch" : ps = {"%", birthLike}
-        End If
-        Dim sql = If(Cfg.ContainsKey(jobKey), Cfg(jobKey), "")
-        If String.IsNullOrWhiteSpace(sql) Then Throw New ApplicationException($"RxBridge.ini 尚未設定 {jobKey}")
-        Dim max = Math.Max(1, Math.Min(200, CInt(Val(Cfg("MaxRows")))))
+        Dim exactIdno = False
         Dim byId As New Dictionary(Of String, Dictionary(Of String, Object))
+        Dim rows As New List(Of Dictionary(Of String, Object))
         Using cn As New OdbcConnection(Cfg("ConnectionString"))
             cn.Open()
-            RunQuery(cn, sql, ps, byId, result, max)
-            ' 身分證完整但藥局系統查不到（例：新客戶身分證未建檔），改用生日找
-            If result.Count = 0 AndAlso jobKey = "QueryIdno" AndAlso birthLike <> "%" Then
-                Dim k2 = If(birthFull <> "", "QueryBirth", "QueryMatch")
-                Dim sql2 = If(Cfg.ContainsKey(k2), Cfg(k2), "")
-                If Not String.IsNullOrWhiteSpace(sql2) Then
-                    RunQuery(cn, sql2, If(birthFull <> "", New String() {birthFull}, New String() {"%", birthLike}), byId, result, max)
+            If idno <> "" AndAlso Not idno.Contains("*") Then RunQuery(cn, CfgSql("QueryIdno"), idno, byId, rows, max)
+            exactIdno = rows.Count > 0          ' 完整身分證查到：直接採用，不再用生日過濾（避免藥局生日建檔錯誤時被濾掉）
+            If rows.Count = 0 AndAlso hasBirth Then
+                If bmo > 0 AndAlso bd > 0 AndAlso bd <= Date.DaysInMonth(yy, bmo) Then
+                    RunQuery(cn, CfgSql("QueryBirth"), $"{yy:0000}/{bmo:00}/{bd:00}", byId, rows, 500)
+                Else
+                    Dim m1 = If(bmo > 0, bmo, 1), m2 = If(bmo > 0, bmo, 12)
+                    Dim d1 = $"{yy:0000}/{m1:00}/01", d2 = $"{yy:0000}/{m2:00}/{Date.DaysInMonth(yy, m2):00}"
+                    RunQuery(cn, CfgSql("QueryBirthRange"), New String() {d1, d2}, byId, rows, 2000)
                 End If
+            ElseIf rows.Count = 0 AndAlso idno.Contains("*") Then
+                Dim prefix = idno.Substring(0, idno.IndexOf("*"c))
+                If prefix.Length >= 2 Then RunQuery(cn, CfgSql("QueryIdnoPrefix"), prefix & "%", byId, rows, 2000)
             End If
         End Using
-        Return result
+
+        ' 生日隱碼過濾（QueryBirthRange 是整年／整月）
+        If exactIdno Then Return rows.Take(max).ToList()
+        If hasBirth Then
+            rows = rows.Where(Function(r)
+                                  Dim m = Regex.Match(CStr(r("birthday")), "^(\d{4})-(\d{2})-(\d{2})$")
+                                  If Not m.Success Then Return False
+                                  Return CInt(m.Groups(1).Value) = yy AndAlso (bmo = 0 OrElse CInt(m.Groups(2).Value) = bmo) AndAlso (bd = 0 OrElse CInt(m.Groups(3).Value) = bd)
+                              End Function).ToList()
+        End If
+        ' 身分證隱碼過濾：有相符的只留相符者
+        If idno <> "" Then
+            Dim pat = "^" & String.Concat(idno.Select(Function(ch) If(ch = "*"c, ".", Regex.Escape(ch.ToString())))) & "$"
+            Dim hit = rows.Where(Function(r) Regex.IsMatch(CStr(r("idno")).Trim().ToUpperInvariant(), pat)).ToList()
+            If hit.Count > 0 OrElse Not hasBirth Then rows = hit
+        End If
+        Return rows.Take(max).ToList()
+    End Function
+
+    Private Function CfgSql(key As String) As String
+        Dim sql = If(Cfg.ContainsKey(key), Cfg(key), "")
+        If String.IsNullOrWhiteSpace(sql) Then Throw New ApplicationException($"RxBridge.ini 尚未設定 {key}")
+        Return sql
     End Function
 
     Private Sub RunQuery(cn As OdbcConnection, sql As String, param As String,

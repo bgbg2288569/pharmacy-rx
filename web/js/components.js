@@ -5,7 +5,7 @@ import {
   parseRocInput, rocOf, fullOf, weekOf, addDays, todayISO, diffDays, dtOf, dayOf, fmtNo, onlyDigits, debounce,
   findStaff, askStaff, bridgeSearch, bump, storeSetting, isoOf, parseISO, fillTpl, copyText, shortHosp, ageOf, birthOf, selfOnly,
   parseBirthInput, birthMatch, isMasked, focusNext, askConfirm, DEFAULT_CANCEL_REASONS, loadStoreData, useDirty, notifyFromMemo,
-  parseRxQr, looksLikeRxQr, bridgeMatch,
+  parseRxQr, looksLikeRxQr, bridgeMatch, recentlyScanned,
 } from './lib.js';
 import { printOrder, getPrintMode, setPrintMode, PRINT_MODES } from './print.js';
 
@@ -559,7 +559,19 @@ export const OrderForm = {
       }
       else if (e.key === 'Escape') suggOpen.value = false;
     }
-    const onNameBlur = () => setTimeout(() => { suggOpen.value = false; checkOpen(); }, 150);
+    const onNameBlur = () => setTimeout(() => {
+      // 掃完處方 QR 卻沒有選客戶就離開姓名欄：視為放棄，清掉 QR 帶入的資料，避免留在頁面被誤用
+      if (qrMode.value && document.activeElement !== nameEl.value) { clearQr(); return; }
+      suggOpen.value = false; checkOpen();
+    }, 150);
+    function clearQr() {
+      const fam = family.value, keepPhone = f.phone, keepNotify = [...f.notify_methods];
+      qrSeq++; seqNo++;
+      load(null); openOrders.value = []; sugg.value = []; suggOpen.value = false; extLoading.value = false;
+      qr.value = null; qrMode.value = false;
+      if (fam) { family.value = fam; f.phone = keepPhone; f.notify_methods = keepNotify; }
+      toast('未選取客戶，已清除處方 QR 帶入的資料', 'info', 2600);
+    }
 
     // ---- 同一病人尚未完成的寄單（含醫院、科別，方便回答「某科的藥寄了沒」）----
     async function checkOpen() {
@@ -642,6 +654,8 @@ export const OrderForm = {
     let orig = '';
     watch(() => props.order, () => nextTick(() => { orig = edit.value ? snap() : ''; }), { immediate: true });
     async function save(print = false) {
+      // 掃描槍剛輸入完（例如中文輸入法造成亂碼、Enter 落到按鈕上）不接受儲存／列印，避免誤印
+      if (recentlyScanned()) { toast('偵測到掃描輸入，已略過這次儲存／列印', 'err', 3000); return; }
       if (saving.value || !validate()) return;
       if (edit.value && snap() === orig) { toast('沒有修改', 'info', 1400); emit('cancel'); return; }
       // 領藥日早於或等於「最新預作日」→ 提醒直接打單調劑

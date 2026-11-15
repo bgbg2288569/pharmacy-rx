@@ -406,3 +406,43 @@ export function parseRxQr(raw) {
     rx_date: c[7] || '', days: c[9] || '',
   };
 }
+
+// ---------------- 掃描槍防呆（全站）----------------
+// 掃描槍是「很快的鍵盤」：連續按鍵間隔 < 35ms 視為掃描中。掃描中：
+//   * 游標不在文字輸入框（例如停在按鈕上）→ 擋下所有按鍵，避免 Enter／空白鍵按到「列印」等按鈕
+//   * 開著中文輸入法（按鍵送進輸入法）→ 擋下 Enter、空白、F1～F12，掃描結束後清空該欄位並提示切換英數
+//   * F1～F12 一律擋下（避免觸發儲存／列印快捷鍵）
+export const scanGuard = { active: false, ime: 0, lastEnd: 0, el: null };
+export const recentlyScanned = (ms = 800) => scanGuard.active || performance.now() - scanGuard.lastEnd < ms;
+let sgLast = 0, sgRun = 0, sgTimer = null;
+const isTextInput = el => !!el && ((el.tagName === 'INPUT' && !/^(button|submit|checkbox|radio|file|reset|image)$/i.test(el.type)) || el.tagName === 'TEXTAREA');
+function sgEnd() {
+  if (scanGuard.active && scanGuard.ime >= 3) {
+    const el = scanGuard.el;
+    if (isTextInput(el)) { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); }
+    toast('掃描時開著中文輸入法，內容變成亂碼已清除。請按 Shift 切換成英數後重新掃描', 'err', 6000);
+    beep('err');
+  }
+  if (scanGuard.active) scanGuard.lastEnd = performance.now();
+  scanGuard.active = false; scanGuard.ime = 0; scanGuard.el = null; sgRun = 0;
+}
+function sgKey(e) {
+  const now = performance.now(), dt = now - sgLast;
+  sgLast = now;
+  const ime = e.isComposing || e.keyCode === 229 || e.key === 'Process';
+  sgRun = dt < 35 ? sgRun + 1 : 0;
+  if (sgRun >= 4 && !scanGuard.active) { scanGuard.active = true; scanGuard.el = e.target; }
+  if (scanGuard.active) {
+    if (ime) scanGuard.ime++;
+    clearTimeout(sgTimer); sgTimer = setTimeout(sgEnd, 300);
+    const fkey = /^F\d{1,2}$/.test(e.key);
+    const block = fkey || !isTextInput(e.target) || (scanGuard.ime > 0 && (e.key === 'Enter' || e.key === ' ' || ime));
+    if (block) { e.preventDefault(); e.stopPropagation(); }
+  }
+}
+let sgInstalled = false;
+export function installScanGuard() {
+  if (sgInstalled) return;
+  sgInstalled = true;
+  window.addEventListener('keydown', sgKey, true);
+}

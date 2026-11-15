@@ -11,7 +11,7 @@
     <Description>處方寄單系統：藥局系統查詢與 4×3 寄單貼紙列印</Description>
     <Company>凌曜股份有限公司</Company>
     <Copyright>Designed by Tom 蔡育霖藥師</Copyright>
-    <Version>1.5.0</Version>
+    <Version>1.5.1</Version>
     <OptionStrict>Off</OptionStrict>
     <OptionInfer>On</OptionInfer>
     <UseWindowsForms>true</UseWindowsForms>

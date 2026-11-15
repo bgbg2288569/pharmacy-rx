@@ -602,7 +602,7 @@ body{container-type:inline-size;container-name:page}
 .dd.sugg .sgh.h{background:var(--teal-soft);color:var(--teal-ink)}
 .dd.sugg .sgh.p{background:var(--blue-soft);color:var(--blue-ink);border-top:1px solid var(--line)}
 .dd.sugg .it.from-p{border-left:3px solid var(--blue-soft)}
-.dd.sugg .d .memo{white-space:normal;color:var(--ink);margin-top:2px}
+.dd.sugg .d .memo{white-space:normal;color:#e0441b;font-weight:700;margin-top:2px}
 .extmemo{margin-top:6px;font-size:13px;font-weight:700;color:var(--blue-ink);background:var(--blue-soft);border-radius:10px;padding:5px 10px;display:flex;gap:8px;align-items:center}
 
 /* v1.12.3 藥局系統兩支電話：可點選切換 */

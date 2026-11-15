@@ -61,7 +61,8 @@ LabelOffsetYmm=0     ; 正數往下
 2. 舊的 `RxBridge.exe` 可刪除，改用新的 `RxBridge寄單系統串接.exe`；開機捷徑也要換成新的。
 3. **保留原本的 `RxBridge.ini`**，只補上新版多出的設定（`LabelPrinter` 等貼紙列印設定、`CodePage`、`QueryBirth`）。
 
-## v1.5.0：掃描處方箋 QR 比對
-- 新增 `GET /match?idno=A123***481&birth=1966-**-26`：身分證／生日的 `*` 隱碼當萬用字元比對 sa100。
-- 身分證完整 → `QueryIdno`；有隱碼 → `QueryMatch`（`idno LIKE ? AND birthday LIKE ?`）；只有完整生日 → `QueryBirth`。
-- 舊版 ini 升級時，請把 `QueryMatch` 那段加進 exe 旁的 RxBridge.ini（沒有這段，掃 QR 時藥局系統查不到資料）。
+## v1.5.x：掃描處方箋 QR 比對
+- `GET /match?idno=A123***481&birth=1966-**-26`：身分證／生日的 `*` 隱碼當萬用字元比對 sa100。
+- 身分證完整 → `QueryIdno`；生日完整 → `QueryBirth`；生日有隱碼 → `QueryBirthRange`（整年／整月）；只有隱碼身分證 → `QueryIdnoPrefix`。
+- 查回後由程式依隱碼過濾（v1.5.1 起不在 SQL 用 LIKE 比對生日，birthday 是日期型態也查得到）。
+- 舊版 ini 升級時，請把 `QueryBirthRange`、`QueryIdnoPrefix` 兩段加進 exe 旁的 RxBridge.ini；舊的 `QueryMatch` 可以刪掉。
