@@ -9,6 +9,7 @@
     <OptionStrict>Off</OptionStrict>
     <OptionInfer>On</OptionInfer>
     <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>RxBridge.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System.Web.Extensions" />
@@ -19,5 +20,6 @@
   <ItemGroup>
     <None Update="RxBridge.ini" CopyToOutputDirectory="PreserveNewest" />
     <None Update="setup_urlacl.bat" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="RxBridge.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

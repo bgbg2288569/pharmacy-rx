@@ -425,8 +425,11 @@ export const OrderForm = {
       const extP = bridgeSearch(s);
       const hist = await rpc('rx_patient_suggest', { p_store: state.storeId, q: s }).catch(() => []);
       if (my !== seqNo) return;
-      const key = (n, b, p) => `${n}|${b || ''}|${p || ''}`;
-      const histKeys = new Set(hist.map(h => key(h.patient_name, h.birth_date, h.phone)));
+      // 藥局客戶是否為寄單系統的客戶：同姓名，且生日相符（隱碼視為相符）或任一支電話相同
+      const inHist = p => hist.some(h => h.patient_name === p.name && (
+        (h.birth_date && p.birthday && birthMatch(h.birth_date, p.birthday.slice(0, 10))) ||
+        (h.phone && [p.phone, ...(p.phones || [])].map(x => onlyDigits(x)).includes(h.phone)) ||
+        (!h.birth_date && !h.phone)));
       const histRows = hist.slice(0, 5).map(h => ({ ...h, src: 'h' }));
       extLoading.value = state.bridge !== 'off';
       sugg.value = histRows;
@@ -438,10 +441,11 @@ export const OrderForm = {
       const keepIdx = suggIdx.value;
       sugg.value = [
         ...histRows,
-        ...ext.slice(0, 10).map(p => ({
+        // 藥局系統：有寄單紀錄的客戶排最前面，其餘（一般處方箋客戶）排後面
+        ...ext.map((p, i) => ({ p, i, hit: inHist(p) })).sort((a, b) => (b.hit - a.hit) || (a.i - b.i)).slice(0, 12).map(({ p, hit }) => ({
           src: 'p', patient_name: p.name, phone: onlyDigits(p.phone), phones: (p.phones || []).map(x => onlyDigits(x)).filter(Boolean),   // 注意：不可直接 map(onlyDigits)，第二個參數會被當成長度
-          birth_date: (p.birthday || '').slice(0, 10), ext_patient_id: p.ext_id || '', id_mask: p.id_mask || '',
-          memo: p.memo || '', notify_methods: notifyFromMemo(p.memo), inHist: histKeys.has(key(p.name, (p.birthday || '').slice(0, 10), onlyDigits(p.phone))),
+          birth_date: (p.birthday || '').slice(0, 10), ext_patient_id: p.ext_id || '', idno: p.idno || p.id_mask || '',
+          memo: p.memo || '', notify_methods: notifyFromMemo(p.memo), inHist: hit,
         })),
       ];
       suggIdx.value = keepIdx;
@@ -658,13 +662,13 @@ export const OrderForm = {
                       title="用這支電話帶入" @mousedown.prevent.stop="pickSugg(s, ph)">{{ph}}</button></template>
                   <span v-else class="num muted">{{s.phone}}</span>
                   <span v-for="m in s.notify_methods||[]" :key="m" class="pill" :class="NOTIFY_CLS[m]">{{m}}</span>
-                  <span v-if="s.inHist" class="small muted">（已有寄單紀錄）</span></div>
+                  <span v-if="s.inHist" class="pill regular">寄單客戶</span></div>
                 <div class="d" v-if="s.src==='h'">
                   <b v-if="s.open_fills" class="warn">未完成 {{s.open_fills}}</b>
                   {{shortHosp(s.hospital_code, s.hospital_name) || '—'}}｜{{s.dept_name || '—'}}｜上次 {{dayOf(s.created_at)}}</div>
                 <div class="d" v-else>
                   <span v-if="s.ext_patient_id">客戶代號 {{s.ext_patient_id}}</span>
-                  <span v-if="s.id_mask">｜{{s.id_mask}}</span>
+                  <span v-if="s.idno">｜{{s.idno}}</span>
                   <div class="memo" v-if="s.memo">備註：{{s.memo}}</div></div>
               </div>
             </div>

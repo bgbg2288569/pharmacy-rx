@@ -610,3 +610,4 @@ body{container-type:inline-size;container-name:page}
 .phchip.main{border-color:var(--blue-ink);color:var(--blue-ink);background:var(--blue-soft)}
 .phchip:hover{border-color:var(--teal)}
 .altph{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap}
+.dd.sugg .pill.regular{background:var(--teal-soft);color:var(--teal-ink);border-color:transparent;font-weight:800}

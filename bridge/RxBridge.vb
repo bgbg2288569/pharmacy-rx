@@ -78,7 +78,7 @@ Module RxBridge
 
     ' ---------------------------------------------------------------- 系統匣
     Private Sub BuildTray()
-        Tray = New NotifyIcon() With {.Icon = Drawing.SystemIcons.Application, .Text = "RxBridge 藥局系統橋接", .Visible = True}
+        Tray = New NotifyIcon() With {.Icon = AppIcon(), .Text = "RxBridge 藥局系統橋接", .Visible = True}
         Dim menu As New ContextMenuStrip()
         menu.Items.Add("測試查詢…", Nothing, Sub() TestQuery())
         menu.Items.Add("重新載入設定", Nothing, Sub()
@@ -88,6 +88,17 @@ Module RxBridge
         menu.Items.Add("結束", Nothing, Sub() Application.Exit())
         Tray.ContextMenuStrip = menu
     End Sub
+
+    ' 系統匣圖示：與寄單網頁相同的雙圓圖示（exe 旁的 RxBridge.ico；找不到就用 exe 內嵌圖示）
+    Private Function AppIcon() As Drawing.Icon
+        Try
+            Dim f = IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RxBridge.ico")
+            If File.Exists(f) Then Return New Drawing.Icon(f, SystemInformation.SmallIconSize)
+            Return Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath)
+        Catch
+            Return Drawing.SystemIcons.Application
+        End Try
+    End Function
 
     Private Sub TestQuery()
         Dim q = Microsoft.VisualBasic.Interaction.InputBox("輸入姓名、電話、民國生日或身分證字號：", "RxBridge 測試", "王")
@@ -138,7 +149,7 @@ Module RxBridge
 
             Select Case req.Url.AbsolutePath.TrimEnd("/"c).ToLowerInvariant()
                 Case "/health"
-                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.2.0"})
+                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.3.0"})
                 Case "/patients"
                     ' 注意：不能用 req.QueryString —— .NET Framework 會用系統預設編碼（Big5）解碼網址，
                     ' 中文會變亂碼，送進 ODBC 後變成一串 ?，反而查到一堆含 ? 的姓名。這裡自己用 UTF-8 解碼。
@@ -184,7 +195,7 @@ Module RxBridge
     '   其他 → QueryName，參數套 NamePattern（例：%王%）
     ' 查詢中每個 ? 都綁同一個值。欄位請用別名：
     '   ext_id（客戶代號）、name、idno、birthday、tel1、tel2、memo（sa110.allergy）
-    ' 回傳前處理：身分證只回傳遮罩後的 id_mask；電話去掉非數字，手機（09）優先；生日轉成 yyyy-MM-dd；
+    ' 回傳前處理：身分證完整回傳（僅本機傳輸）；電話去掉非數字，手機（09）優先；生日轉成 yyyy-MM-dd；
     '   同一客戶代號有多筆家庭健康檔時合併成一筆，備註串在一起。
     Private ReadOnly IdnoRx As New Regex("^[A-Za-z][A-Da-d0-9][0-9]{8}$")
 
@@ -201,7 +212,7 @@ Module RxBridge
         Else
             jobs.Add(New KeyValuePair(Of String, String)("QueryName", Cfg("NamePattern").Replace("{q}", SafeLike(q))))
         End If
-        Dim max = Math.Max(1, Math.Min(50, CInt(Val(Cfg("MaxRows")))))
+        Dim max = Math.Max(1, Math.Min(200, CInt(Val(Cfg("MaxRows")))))
         Dim byId As New Dictionary(Of String, Dictionary(Of String, Object))
         Dim list As New List(Of Dictionary(Of String, Object))
         Using cn As New OdbcConnection(Cfg("ConnectionString"))
@@ -252,7 +263,7 @@ Module RxBridge
                         {"birthday", NormDate(Get1(raw, "birthday"))},
                         {"phone", If(mobile, If(phones.FirstOrDefault(), ""))},
                         {"phones", phones},
-                        {"id_mask", MaskId(Get1(raw, "idno"))},
+                        {"idno", Get1(raw, "idno").ToUpperInvariant()},
                         {"memo", memo}
                     }
                     list.Add(row)
@@ -314,11 +325,5 @@ Module RxBridge
         Return ""
     End Function
 
-    ' A123456789 → A123***789（隱去中間 3 碼，用來分辨同名）
-    Private Function MaskId(s As String) As String
-        If String.IsNullOrWhiteSpace(s) OrElse s.Length < 7 Then Return ""
-        Dim start = (s.Length - 3) \ 2
-        Return s.Substring(0, start) & "***" & s.Substring(start + 3)
-    End Function
 
 End Module
