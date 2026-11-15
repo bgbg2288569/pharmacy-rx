@@ -398,9 +398,10 @@ export const OrderForm = {
 
     // 藥局系統（調劑系統）帶入的客戶備註（sa110.allergy），只顯示參考，不存進寄單
     const extMemo = ref('');
+    const extPhones = ref([]);          // 藥局系統的電話 1／電話 2，可點選切換
     function load(o) {
       Object.assign(f, emptyForm());
-      extMemo.value = '';
+      extMemo.value = ''; extPhones.value = [];
       if (!o) return;
       Object.assign(f, {
         patient_name: o.patient_name, birth_date: o.birth_date || '', phone: o.phone || '', notify_methods: [...(o.notify_methods || [])],
@@ -438,7 +439,7 @@ export const OrderForm = {
       sugg.value = [
         ...histRows,
         ...ext.slice(0, 10).map(p => ({
-          src: 'p', patient_name: p.name, phone: onlyDigits(p.phone), phones: (p.phones || []).map(onlyDigits).filter(Boolean),
+          src: 'p', patient_name: p.name, phone: onlyDigits(p.phone), phones: (p.phones || []).map(x => onlyDigits(x)).filter(Boolean),   // 注意：不可直接 map(onlyDigits)，第二個參數會被當成長度
           birth_date: (p.birthday || '').slice(0, 10), ext_patient_id: p.ext_id || '', id_mask: p.id_mask || '',
           memo: p.memo || '', notify_methods: notifyFromMemo(p.memo), inHist: histKeys.has(key(p.name, (p.birthday || '').slice(0, 10), onlyDigits(p.phone))),
         })),
@@ -446,12 +447,13 @@ export const OrderForm = {
       suggIdx.value = keepIdx;
       if (document.activeElement === nameEl.value) suggOpen.value = sugg.value.length > 0;
     }, 220);
-    const onName = () => { openOrders.value = []; extMemo.value = ''; if (!edit.value) doSuggest(f.patient_name.trim()); };
-    function pickSugg(s) {
+    const onName = () => { openOrders.value = []; extMemo.value = ''; extPhones.value = []; if (!edit.value) doSuggest(f.patient_name.trim()); };
+    function pickSugg(s, phone) {
       if (!s) return;
       f.patient_name = s.patient_name;
       if (s.birth_date) f.birth_date = s.birth_date;
-      if (s.phone) f.phone = s.phone;
+      if (phone || s.phone) f.phone = phone || s.phone;
+      extPhones.value = s.src === 'p' ? (s.phones || []) : [];
       if (s.ext_patient_id) f.ext_patient_id = s.ext_patient_id;
       if (s.src === 'h') {
         f.notify_methods = [...(s.notify_methods || [])];
@@ -459,6 +461,7 @@ export const OrderForm = {
         f.dept_code = s.dept_code || ''; f.dept_name = s.dept_name || '';
         extMemo.value = '';
       } else {
+        // 有兩支電話時預設帶手機（09 開頭）；可在電話欄下方點另一支切換
         // 藥局系統：備註含 LINE／簡訊／電話 → 預選通知方式；備註整串顯示在通知方式下方
         if (s.notify_methods.length) f.notify_methods = [...s.notify_methods];
         extMemo.value = s.memo || '';
@@ -628,7 +631,7 @@ export const OrderForm = {
     onBeforeUnmount(() => window.removeEventListener('keydown', onHotkey));
 
     return {
-      extLoading, extMemo, state, root, nameEl, f, family, errs, saving, sugg, suggOpen, suggIdx, openOrders, sameNameOther, edit, printMode, PRINT_MODES,
+      extPhones, extLoading, extMemo, state, root, nameEl, f, family, errs, saving, sugg, suggOpen, suggIdx, openOrders, sameNameOther, edit, printMode, PRINT_MODES,
       phoneReq, quickDepts, fillOf, onBtnKey, NOTIFY_CLS, onPhone, onName, pickSugg, onNameKey, onNameBlur, hasPhrase, togglePhrase, onHospPick, pickQuick,
       pickDept, onFormKey, save, reset, checkOpen, FILL_STATUS, fmtNo, dayOf, rocOf, shortHosp, birthOf, ageOf, fullOf, emit,
     };
@@ -650,7 +653,10 @@ export const OrderForm = {
               <div class="grow">
                 <div class="l1"><b>{{s.patient_name}}</b>
                   <span v-if="s.birth_date" class="num">{{fullOf(s.birth_date)}}</span>
-                  <span class="num muted">{{ s.src==='p' && s.phones?.length ? s.phones.join(' / ') : s.phone }}</span>
+                  <template v-if="s.src==='p' && s.phones?.length > 1">
+                    <button type="button" v-for="ph in s.phones" :key="ph" class="phchip num" :class="{main: ph===s.phone}"
+                      title="用這支電話帶入" @mousedown.prevent.stop="pickSugg(s, ph)">{{ph}}</button></template>
+                  <span v-else class="num muted">{{s.phone}}</span>
                   <span v-for="m in s.notify_methods||[]" :key="m" class="pill" :class="NOTIFY_CLS[m]">{{m}}</span>
                   <span v-if="s.inHist" class="small muted">（已有寄單紀錄）</span></div>
                 <div class="d" v-if="s.src==='h'">
@@ -675,6 +681,9 @@ export const OrderForm = {
         <label>電話 <span class="req" v-if="phoneReq">*</span><span class="opt" v-else>LINE／自取可不填</span></label>
         <input class="inp big num" :class="{err:errs.phone}" data-nav :value="f.phone" @input="onPhone" @blur="checkOpen"
           inputmode="numeric" maxlength="10" autocomplete="off">
+        <div class="altph" v-if="extPhones.length > 1"><span class="tiny muted">藥局系統電話：</span>
+          <button type="button" tabindex="-1" v-for="ph in extPhones" :key="ph" class="phchip num" :class="{main: ph===f.phone}"
+            @click="f.phone = ph">{{ph}}</button></div>
       </div>
 
       <div class="fld c12" v-if="family">
