@@ -333,8 +333,11 @@ begin
     update rx_orders set family_no = p->>'family_no' where order_no = p->>'family_no' and family_no is null;
   end if;
 
+  -- 軌跡：網頁建檔記 create；調劑輸出程式送單（rx_intake，source = dispensing）記 intake
   insert into rx_logs (order_id, store_id, action, detail, staff_code, staff_name)
-  values (v_id, v_store, 'create', p - 'store_id', v_code, v_name);
+  values (v_id, v_store,
+          case when coalesce(nullif(p->>'source', ''), 'web') = 'dispensing' then 'intake' else 'create' end,
+          p - 'store_id', v_code, v_name);
 
   return jsonb_build_object('id', v_id, 'order_no', v_no);
 end $$;
@@ -845,7 +848,7 @@ declare
   k rx_api_keys; st rx_stores; v_staff record; o rx_orders;
   v_phone text; v_mobile text; v_birth date; v_notify text[]; v_memo text;
   v_hcode text; v_hname text; v_dcode text; v_dname text;
-  v_fills jsonb := '[]'; f jsonb; d date; v_disp date; v_days int; v_cur int; v_total int; v_lead int; n int;
+  v_fills jsonb := '[]'; f jsonb; d date; v_disp date; v_start date; v_days int; v_cur int; v_total int; v_lead int; n int;
   v_warn text[] := '{}'; v_last date; v_payload jsonb; v_res jsonb; v_code text; v_sname text;
   v_field text := null;
 begin
@@ -905,7 +908,10 @@ begin
   select name into v_dname from rx_departments where code = v_dcode;
   if v_dname is null then v_dcode := null; v_dname := nullif(trim(p->>'dept_name'), ''); end if;   -- 清單外科別只存名稱
 
-  -- 領藥日：指定 fills 優先；否則依 rx 計算（下一次 = 調劑日 + 天數×間隔 − 提前天數）
+  -- 領藥日：指定 fills 優先；否則依 rx 計算
+  --   診所算法：第 n 次 = 第一次日期（XML continous_prescription@start_at）+ 天數 ×（n−1）− 9 天
+  --   例 28 天：10/27、11/15、12/13；29、30 天的間隔各多 1、2 天
+  --   沒有第一次日期時：調劑日 + 天數 ×（n − 本次）− 提前天數
   if jsonb_array_length(coalesce(p->'fills', '[]')) > 0 then
     for f in select * from jsonb_array_elements(p->'fills') loop
       d := rx_parse_date(f->>'due_date');
@@ -914,15 +920,18 @@ begin
     end loop;
   elsif p ? 'rx' then
     v_disp := rx_parse_date(p->'rx'->>'dispense_date');
+    v_start := rx_parse_date(p->'rx'->>'start_date');
     v_days := nullif(p->'rx'->>'days', '')::int;
     v_cur := coalesce(nullif(p->'rx'->>'current_seq', '')::int, 1);
     v_total := coalesce(nullif(p->'rx'->>'total', '')::int, 3);
-    v_lead := coalesce(nullif(p->'rx'->>'lead_days', '')::int, 10);
-    if v_disp is null or coalesce(v_days, 0) <= 0 then
-      return jsonb_build_object('ok', false, 'code', 'VALIDATION', 'field', 'rx', 'message', '調劑日或處方天數錯誤');
+    v_lead := coalesce(nullif(p->'rx'->>'lead_days', '')::int, 9);
+    if coalesce(v_start, v_disp) is null or coalesce(v_days, 0) <= 0 then
+      return jsonb_build_object('ok', false, 'code', 'VALIDATION', 'field', 'rx', 'message', '第一次日期（或調劑日）、處方天數錯誤');
     end if;
     for n in (v_cur + 1)..least(v_total, 3) loop
-      v_fills := v_fills || jsonb_build_object('seq', n, 'due_date', v_disp + v_days * (n - v_cur) - v_lead);
+      v_fills := v_fills || jsonb_build_object('seq', n, 'due_date',
+        case when v_start is not null then v_start + v_days * (n - 1) - v_lead
+             else v_disp + v_days * (n - v_cur) - v_lead end);
     end loop;
     if jsonb_array_length(v_fills) = 0 then
       return jsonb_build_object('ok', false, 'code', 'NO_REMAINING_FILL', 'field', 'rx', 'message', '這張慢箋已是最後一次，沒有可寄放的次數');
@@ -991,6 +1000,10 @@ language sql immutable as $$
     '^(.{2,20}?)基金會(?=.)', ''),
     '^(行政院國軍退除役官兵輔導委員會|行政院衛生署|衛生福利部|國防部|國立|私立|台灣基督長老教會|基督長老教會|天主教)+', ''));
 $$;
+
+-- v1.14.2：先前由調劑系統建立的寄單，建檔軌跡改為 intake（可重複執行）
+update rx_logs set action = 'intake'
+ where action = 'create' and order_id in (select id from rx_orders where source = 'dispensing');
 
 -- 回應內容（含貼紙要印的文字）
 create or replace function rx_intake_result(p_id bigint, p_dup boolean, p_warn text[]) returns jsonb

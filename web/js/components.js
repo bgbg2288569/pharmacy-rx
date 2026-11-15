@@ -829,6 +829,7 @@ export const OrderDetail = {
     function logText(l) {
       const d = l.detail || {};
       if (l.action === 'create') return d.family_no ? '同行家人 ' + fmtNo(d.family_no) : '';
+      if (l.action === 'intake') return d.client_ref ? '處方 ' + String(d.client_ref).split('|')[0] : '';
       if (l.action === 'edit') {
         const b = d.before || {}, a = d.after || {}, out = [];
         const keys = { patient_name: '姓名', birth_date: '生日', phone: '電話', note: '備註', hospital_name: '醫院', dept_name: '科別' };

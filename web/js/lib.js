@@ -18,7 +18,7 @@ export const NOTIFY_CLS = { LINE: 'line', 簡訊: 'sms', 電話: 'tel', 自取: 
 export const FILL_STATUS = { pending: '寄放中', prepared: '已預作', notified: '已通知', picked: '已領取', cancelled: '已取消' };
 export const ORDER_STATUS = { active: '進行中', closed: '已完成', cancelled: '已取消' };
 export const ACTION_LABEL = {
-  create: '寄單建檔', edit: '修改資料', print: '列印單據', prepare: '預作確認', unprepare: '取消預作',
+  create: '寄單建檔', intake: '調劑輸出系統匯入', edit: '修改資料', print: '列印單據', prepare: '預作確認', unprepare: '取消預作',
   family: '連結同行家人', unfamily: '解除同行家人',
   notify: '已通知', unnotify: '撤銷通知', pickup: '已領取', unpickup: '撤銷領取', cancel: '取消', restore: '復原',
 };

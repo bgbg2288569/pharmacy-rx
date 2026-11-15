@@ -616,3 +616,5 @@ code.keybox{font-family:var(--f-num);font-size:14px;background:#fff;border:1.5px
 table.kv td{padding:5px 10px 5px 0;vertical-align:top}
 table.kv td:first-child{color:var(--muted);white-space:nowrap;font-weight:700}
 label.ck{display:inline-flex;gap:6px;align-items:center;font-weight:700;cursor:pointer}
+/* v1.14.2 軌跡：調劑輸出系統匯入 */
+.tlr.a-intake .act{color:var(--blue-ink)}
