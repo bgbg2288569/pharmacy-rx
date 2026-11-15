@@ -18,6 +18,9 @@
     <Reference Include="Microsoft.VisualBasic" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="QRCoder" Version="1.4.3" />
+  </ItemGroup>
+  <ItemGroup>
     <None Update="RxBridge.ini" CopyToOutputDirectory="PreserveNewest" />
     <None Update="setup_urlacl.bat" CopyToOutputDirectory="PreserveNewest" />
     <None Update="RxBridge.ico" CopyToOutputDirectory="PreserveNewest" />

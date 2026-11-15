@@ -611,3 +611,8 @@ body{container-type:inline-size;container-name:page}
 .phchip:hover{border-color:var(--teal)}
 .altph{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap}
 .dd.sugg .pill.regular{background:var(--teal-soft);color:var(--teal-ink);border-color:transparent;font-weight:800}
+/* v1.14 調劑串接 */
+code.keybox{font-family:var(--f-num);font-size:14px;background:#fff;border:1.5px dashed var(--teal);border-radius:10px;padding:6px 10px;user-select:all;word-break:break-all}
+table.kv td{padding:5px 10px 5px 0;vertical-align:top}
+table.kv td:first-child{color:var(--muted);white-space:nowrap;font-weight:700}
+label.ck{display:inline-flex;gap:6px;align-items:center;font-weight:700;cursor:pointer}

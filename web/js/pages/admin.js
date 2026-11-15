@@ -1,6 +1,7 @@
 // 系統管理（管理員）：門市、帳號、人員代碼、醫院、科別、全域片語、系統參數
-import { ref, reactive, computed, onMounted } from 'vue';
-import { sb, state, q, toast, toastErr, loadCommon, loadStoreData, debounce, useDirty } from '../lib.js';
+import { ref, reactive, computed, watch, onMounted } from 'vue';
+import { sb, state, q, rpc, toast, toastErr, loadCommon, loadStoreData, debounce, useDirty, copyText, dtOf } from '../lib.js';
+import { CONFIG } from '../config.js';
 import { CrudTable, TplInput, PhraseEditor, UnsavedBar, loadPhraseList, savePhraseList } from '../components.js';
 
 function parseCsv(text) {
@@ -172,15 +173,36 @@ export default {
       if (!confirm('放棄帳號、全域片語、系統參數的未儲存變更？')) return;
       loadUsers(); loadPhr(); loadGs();
     }
+    // 調劑系統串接：門市 API 金鑰（產生、停用為立即動作）
+    const keys = ref([]);
+    const nk = reactive({ store_id: '', name: '' });
+    const newKey = ref(null);           // { key, store, name } 只顯示這一次
+    async function loadKeys() {
+      try { keys.value = await q(sb.from('rx_api_keys').select('*').order('store_id').order('created_at')); } catch (e) { toastErr(e); }
+    }
+    async function createKey() {
+      if (!nk.store_id) return toast('請選擇門市', 'err');
+      try {
+        const k = await rpc('rx_api_key_create', { p_store: nk.store_id, p_name: nk.name || '調劑電腦' });
+        newKey.value = { key: k, store: storeName(nk.store_id), name: nk.name || '調劑電腦' };
+        nk.name = ''; await loadKeys();
+      } catch (e) { toastErr(e); }
+    }
+    async function toggleKey(k) {
+      if (k.active && !confirm(`停用「${storeName(k.store_id)} ${k.name}」的金鑰？停用後該電腦無法再送寄單。`)) return;
+      try { await q(sb.from('rx_api_keys').update({ active: !k.active }).eq('id', k.id)); await loadKeys(); toast(k.active ? '已停用' : '已啟用', 'ok', 1400); } catch (e) { toastErr(e); }
+    }
+    const apiBase = CONFIG.SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/rpc/rx_intake';
+    watch(tab, t => { if (t === 'apikeys') loadKeys(); });
     onMounted(() => { loadGs(); loadUsers(); loadPhr(); });
 
-    return { switchTab, usersDirty, phr, aDirtyCount, aBusy, saveAdmin, discardAdmin, state, tab, storeOpts, staffStoreOpts, hq, hKey, setHq, hospQuery, reloadAll, nu, showPw, users, uBusy, pw, uDirty,
+    return { keys, nk, newKey, createKey, toggleKey, apiBase, CONFIG, copyText, dtOf, switchTab, usersDirty, phr, aDirtyCount, aBusy, saveAdmin, discardAdmin, state, tab, storeOpts, staffStoreOpts, hq, hKey, setHq, hospQuery, reloadAll, nu, showPw, users, uBusy, pw, uDirty,
       createUser, toggleActive, openPw, submitPw, loadUsers, storeName, gs, saveGs };
   },
   template: `<div class="wrap">
     <div class="page-head"><h2><i class="sl"></i>系統管理</h2></div>
     <div class="subnav">
-      <button v-for="(t,k) in {stores:'門市',users:'帳號',staff:'人員代碼',hosp:'醫院清單',dept:'科別清單',phrase:'全域片語',params:'系統參數'}"
+      <button v-for="(t,k) in {stores:'門市',users:'帳號',staff:'人員代碼',hosp:'醫院清單',dept:'科別清單',phrase:'全域片語',params:'系統參數',apikeys:'調劑串接'}"
         :key="k" :class="{on:tab===k}" @click="switchTab(k)">{{t}}</button>
     </div>
 
@@ -281,6 +303,49 @@ export default {
         <div class="fld c12"><label>預設發票機單據底部文字</label><input class="inp" v-model="gs.receipt_footer"></div>
       </div>
     </div>
+
+    <template v-if="tab==='apikeys'">
+      <div class="card">
+        <h3><i class="sl"></i>產生 API 金鑰</h3>
+        <p class="small muted" style="margin:0 0 10px">調劑輸出程式用這組金鑰把寄單送進系統。每間門市（或每台調劑電腦）一組，寄單一律建在金鑰所屬門市。</p>
+        <div class="form" style="align-items:end">
+          <div class="fld c3"><label>門市</label><select class="inp" v-model="nk.store_id"><option value="">請選擇</option>
+            <option v-for="s in state.stores" :key="s.id" :value="s.id">{{s.id}} {{s.name}}</option></select></div>
+          <div class="fld c4"><label>名稱 <span class="opt">例：福原 調劑電腦 1</span></label><input class="inp" v-model="nk.name"></div>
+          <div class="fld c2"><button class="btn fill" @click="createKey">產生金鑰</button></div>
+        </div>
+        <div class="alert ok" v-if="newKey" style="margin-top:12px">
+          <div><b>{{newKey.store}} {{newKey.name}}</b> 的金鑰（<b>只會顯示這一次</b>，請複製到調劑輸出程式的設定）：</div>
+          <div class="btns" style="margin-top:6px"><code class="keybox">{{newKey.key}}</code>
+            <button class="btn sm" @click="copyText(newKey.key)">複製</button>
+            <button class="btn sm ghost" @click="newKey=null">我已複製</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="btns" style="margin-bottom:8px"><h3 style="margin:0"><i class="sl"></i>金鑰清單</h3></div>
+        <div class="tbl"><table>
+          <thead><tr><th style="width:140px">門市</th><th>名稱</th><th style="width:150px">金鑰開頭</th><th style="width:150px">建立</th><th style="width:150px">最後使用</th><th style="width:80px">狀態</th><th style="width:90px"></th></tr></thead>
+          <tbody>
+            <tr v-for="k in keys" :key="k.id" style="cursor:default" :class="{done: !k.active}">
+              <td>{{k.store_id}} {{storeName(k.store_id)}}</td><td>{{k.name}}</td><td class="num">{{k.key_prefix}}…</td>
+              <td class="num small">{{dtOf(k.created_at)}}</td><td class="num small">{{k.last_used_at ? dtOf(k.last_used_at) : '—'}}</td>
+              <td><span class="pill" :class="k.active ? 'notified' : 'cancelled'">{{k.active ? '啟用' : '停用'}}</span></td>
+              <td><button class="btn xs" :class="k.active ? 'danger' : ''" @click="toggleKey(k)">{{k.active ? '停用' : '啟用'}}</button></td>
+            </tr>
+            <tr class="empty-row" v-if="!keys.length"><td colspan="7">尚未產生金鑰</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h3><i class="sl"></i>調劑輸出程式設定值</h3>
+        <table class="kv small">
+          <tr><td>API 網址</td><td><code>{{apiBase}}</code> <button class="btn xs" @click="copyText(apiBase)">複製</button></td></tr>
+          <tr><td>apikey（anon key）</td><td><code class="ell" style="max-width:520px;display:inline-block;vertical-align:bottom">{{CONFIG.SUPABASE_ANON_KEY}}</code> <button class="btn xs" @click="copyText(CONFIG.SUPABASE_ANON_KEY)">複製</button></td></tr>
+          <tr><td>門市 API 金鑰</td><td>上方產生的 rxk_ 開頭金鑰</td></tr>
+        </table>
+        <p class="small muted" style="margin-top:8px">anon key 本來就公開在網頁裡，真正的權限由門市 API 金鑰控管；金鑰外洩時在上方停用後重新產生即可。</p>
+      </div>
+    </template>
 
     <UnsavedBar :dirty="aDirtyCount>0" :busy="aBusy" :count="aDirtyCount" @save="saveAdmin" @discard="discardAdmin" />
   </div>`,

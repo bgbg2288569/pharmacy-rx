@@ -200,3 +200,11 @@ git push -u origin main
 4. `sql/import/匯入檢核清單.xlsx` 列出需要人工核對的資料（Excel 列號、原始內容、處理方式）。
 5. 人員代碼的姓名先填「待補資料」，到「系統管理 › 人員代碼」補上即可。
 6. 重新產生 SQL：`python3 tools/import_old.py 舊資料.xlsx sql/import`
+
+## 附錄：調劑輸出程式串接（v1.14）
+
+1. SQL Editor 重跑 `sql/01_schema.sql`（新增 rx_api_keys、rx_intake 等，不影響現有資料）。
+2. 寄單網頁「系統管理 › 調劑串接」產生門市 API 金鑰（只顯示一次），同頁可複製 API 網址與 anon key。
+3. RxBridge：用新的 `bridge/` 檔案重新建置（新增 QRCoder 套件），`RxBridge.ini` 設定 `LabelPrinter`，系統匣「測試列印貼紙」確認位置。
+4. 調劑輸出程式：加入 `dispensing/FormRxDeposit.vb`，依 `dispensing/Form1_寄單串接.vb.txt` 加右鍵選單與 4 個設定值。
+5. 詳細欄位與回應格式見 `docs/調劑系統串接API規格.md`。

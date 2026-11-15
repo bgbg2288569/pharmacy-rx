@@ -18,6 +18,10 @@ Imports System.Text.RegularExpressions
 Imports System.Threading
 Imports System.Web.Script.Serialization
 Imports System.Windows.Forms
+Imports System.Drawing
+Imports System.Drawing.Drawing2D
+Imports System.Drawing.Printing
+Imports QRCoder
 
 Module RxBridge
 
@@ -81,6 +85,7 @@ Module RxBridge
         Tray = New NotifyIcon() With {.Icon = AppIcon(), .Text = "RxBridge 藥局系統橋接", .Visible = True}
         Dim menu As New ContextMenuStrip()
         menu.Items.Add("測試查詢…", Nothing, Sub() TestQuery())
+        menu.Items.Add("測試列印貼紙", Nothing, Sub() TestPrint())
         menu.Items.Add("重新載入設定", Nothing, Sub()
                                                LoadConfig()
                                                Tray.ShowBalloonTip(2000, "RxBridge", "設定已重新載入", ToolTipIcon.Info)
@@ -142,20 +147,35 @@ Module RxBridge
             ElseIf origin IsNot Nothing Then
                 Reply(res, 403, New With {.error = "origin not allowed"}) : Return
             End If
-            res.AddHeader("Access-Control-Allow-Methods", "GET, OPTIONS")
+            res.AddHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             res.AddHeader("Access-Control-Allow-Headers", "*")
             res.AddHeader("Access-Control-Allow-Private-Network", "true")
             If req.HttpMethod = "OPTIONS" Then res.StatusCode = 204 : res.Close() : Return
 
             Select Case req.Url.AbsolutePath.TrimEnd("/"c).ToLowerInvariant()
                 Case "/health"
-                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.3.0"})
+                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.4.0"})
                 Case "/patients"
                     ' 注意：不能用 req.QueryString —— .NET Framework 會用系統預設編碼（Big5）解碼網址，
                     ' 中文會變亂碼，送進 ODBC 後變成一串 ?，反而查到一堆含 ? 的姓名。這裡自己用 UTF-8 解碼。
                     Dim q = QueryParam(req.Url.Query, "q").Trim()
                     If q.Length = 0 Then Reply(res, 200, New List(Of Object)) : Return
                     Reply(res, 200, SearchPatients(q))
+                Case "/print-label"
+                    If req.HttpMethod <> "POST" Then Reply(res, 405, New With {.error = "請用 POST"}) : Return
+                    Dim body As String
+                    Using sr As New StreamReader(req.InputStream, Encoding.UTF8)
+                        body = sr.ReadToEnd()
+                    End Using
+                    Dim obj = Json.Deserialize(Of Dictionary(Of String, Object))(body)
+                    Dim labelObj As Object = Nothing
+                    If obj IsNot Nothing Then obj.TryGetValue("label", labelObj)
+                    Dim label = TryCast(labelObj, Dictionary(Of String, Object))
+                    If label Is Nothing Then Reply(res, 400, New With {.error = "缺少 label"}) : Return
+                    Dim copies = 1
+                    If obj.ContainsKey("copies") Then copies = Math.Max(1, Math.Min(10, CInt(Val(obj("copies")))))
+                    Dim printer = PrintLabel(label, copies)
+                    Reply(res, 200, New With {.ok = True, .printer = printer})
                 Case Else
                     Reply(res, 404, New With {.error = "not found"})
             End Select
@@ -325,5 +345,152 @@ Module RxBridge
         Return ""
     End Function
 
+
+    ' ---------------------------------------------------------------- 4×3 寄單貼紙列印
+    ' 版面與網頁相同：左 QR＋寄單編號；右 姓名、醫院、科別、電話、通知方式；粗線下方 ➋12/02 ➌12/30
+    ' 印表機：RxBridge.ini 的 LabelPrinter（空白＝Windows 預設印表機）；尺寸：LabelWidthMm × LabelHeightMm
+    Private ReadOnly PrintLock As New Object()
+
+    Private Function PrintLabel(label As Dictionary(Of String, Object), copies As Integer) As String
+        SyncLock PrintLock
+            Dim w = CSng(Val(If(Cfg.ContainsKey("LabelWidthMm"), Cfg("LabelWidthMm"), "40")))
+            Dim h = CSng(Val(If(Cfg.ContainsKey("LabelHeightMm"), Cfg("LabelHeightMm"), "30")))
+            Using doc As New PrintDocument()
+                Dim pn = If(Cfg.ContainsKey("LabelPrinter"), Cfg("LabelPrinter"), "").Trim()
+                If pn <> "" Then
+                    doc.PrinterSettings.PrinterName = pn
+                    If Not doc.PrinterSettings.IsValid Then Throw New ApplicationException($"找不到印表機「{pn}」，請確認 RxBridge.ini 的 LabelPrinter")
+                End If
+                doc.DocumentName = "寄單貼紙 " & S(label, "order_no")
+                doc.PrinterSettings.Copies = CShort(copies)
+                ' 紙張大小以 1/100 英吋為單位
+                doc.DefaultPageSettings.PaperSize = New PaperSize("RxLabel", CInt(Math.Round(w / 25.4 * 100)), CInt(Math.Round(h / 25.4 * 100)))
+                doc.DefaultPageSettings.Margins = New Margins(0, 0, 0, 0)
+                doc.DefaultPageSettings.Landscape = False
+                doc.OriginAtMargins = False
+                AddHandler doc.PrintPage, Sub(sender As Object, e As PrintPageEventArgs) DrawLabel(e.Graphics, label, w, h)
+                doc.Print()
+                Return doc.PrinterSettings.PrinterName
+            End Using
+        End SyncLock
+    End Function
+
+    Private Function S(d As Dictionary(Of String, Object), k As String) As String
+        Dim v As Object = Nothing
+        Return If(d IsNot Nothing AndAlso d.TryGetValue(k, v) AndAlso v IsNot Nothing, v.ToString(), "")
+    End Function
+
+    ' 依可用寬度自動縮小字級（mm）
+    Private Function FitFont(g As Graphics, text As String, family As String, style As FontStyle, maxMm As Single, widthMm As Single, Optional minMm As Single = 1.6F) As Font
+        Dim size = maxMm
+        Do
+            Dim f As New Font(family, size, style, GraphicsUnit.Millimeter)
+            If size <= minMm OrElse g.MeasureString(text, f, PointF.Empty, StringFormat.GenericTypographic).Width <= widthMm Then Return f
+            f.Dispose()
+            size -= 0.1F
+        Loop
+    End Function
+
+    Private Sub DrawLabel(g As Graphics, label As Dictionary(Of String, Object), w As Single, h As Single)
+        g.PageUnit = GraphicsUnit.Millimeter
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit
+        g.SmoothingMode = SmoothingMode.HighQuality
+        Dim cjk = If(Cfg.ContainsKey("LabelFont"), Cfg("LabelFont"), "Microsoft JhengHei")
+        Dim fmt = StringFormat.GenericTypographic
+        Dim offX = CSng(Val(If(Cfg.ContainsKey("LabelOffsetXmm"), Cfg("LabelOffsetXmm"), "0")))
+        Dim offY = CSng(Val(If(Cfg.ContainsKey("LabelOffsetYmm"), Cfg("LabelOffsetYmm"), "0")))
+        g.TranslateTransform(offX, offY)
+
+        Const L As Single = 1.5F, T As Single = 1.0F
+        Dim innerW = w - L * 2
+        Dim fillsH = 6.4F                               ' 下方領藥日區高度
+        Dim lineY = h - 0.8F - fillsH                   ' 粗線位置
+        Dim qrSize = Math.Min(15.0F, lineY - T - 3.0F)  ' QR 邊長（下方留編號空間）
+
+        ' --- QR ＋ 寄單編號 ---
+        Dim orderNo = S(label, "order_no")
+        If orderNo <> "" Then
+            Using gen As New QRCodeGenerator()
+                Using data = gen.CreateQrCode(orderNo, QRCodeGenerator.ECCLevel.M)
+                    Using qr As New QRCode(data)
+                        Using bmp = qr.GetGraphic(8, Color.Black, Color.White, False)
+                            g.InterpolationMode = InterpolationMode.NearestNeighbor
+                            g.PixelOffsetMode = PixelOffsetMode.Half
+                            g.DrawImage(bmp, New RectangleF(L, T, qrSize, qrSize))
+                        End Using
+                    End Using
+                End Using
+            End Using
+        End If
+        Dim noText = If(S(label, "order_no_fmt") <> "", S(label, "order_no_fmt"), orderNo)
+        Using f = FitFont(g, noText, "Arial", FontStyle.Bold, 2.25F, qrSize + 0.5F)
+            Dim sz = g.MeasureString(noText, f, PointF.Empty, fmt)
+            g.DrawString(noText, f, Brushes.Black, L + (qrSize - sz.Width) / 2, T + qrSize + 0.3F, fmt)
+        End Using
+
+        ' --- 右側文字欄 ---
+        Dim rx = L + qrSize + 1.3F
+        Dim rw = w - L - rx
+        Dim lines As New List(Of Tuple(Of String, String, FontStyle, Single))
+        lines.Add(Tuple.Create(S(label, "patient_name"), cjk, FontStyle.Bold, 5.6F))
+        For Each k In {"hospital", "dept", "phone", "notify"}
+            Dim t = S(label, k)
+            If t <> "" Then lines.Add(Tuple.Create(t, If(k = "phone", "Arial", cjk), FontStyle.Bold, 3.0F))
+        Next
+        ' 先算總高度，垂直置中於 QR 區
+        Dim fonts = lines.Select(Function(ln) FitFont(g, ln.Item1, ln.Item2, ln.Item3, ln.Item4, rw)).ToList()
+        Dim heights = fonts.Select(Function(ft) ft.GetHeight(g) * 0.98F).ToList()
+        Dim y = T + Math.Max(0, (lineY - T - 0.4F - heights.Sum()) / 2)
+        For i = 0 To lines.Count - 1
+            g.DrawString(lines(i).Item1, fonts(i), Brushes.Black, rx, y, fmt)
+            y += heights(i)
+            fonts(i).Dispose()
+        Next
+
+        ' --- 粗線 ---
+        Using pen As New Pen(Color.Black, 0.55F)
+            g.DrawLine(pen, L, lineY, w - L, lineY)
+        End Using
+
+        ' --- 領藥日：➊➋➌ + MM/DD（平均分配寬度） ---
+        Dim fillsObj As Object = Nothing
+        label.TryGetValue("fills", fillsObj)
+        Dim fills = TryCast(fillsObj, System.Collections.IList)
+        If fills Is Nothing OrElse fills.Count = 0 Then Return
+        Dim marks = New String() {"", "➊", "➋", "➌"}
+        Dim colW = innerW / fills.Count
+        Dim size = Math.Min(5.2F, (colW - 1.2F) / 3.8F)
+        Using fNum As New Font("Arial", size, FontStyle.Bold, GraphicsUnit.Millimeter),
+              fMark As New Font("Segoe UI Symbol", size * 1.05F, FontStyle.Regular, GraphicsUnit.Millimeter)
+            For i = 0 To fills.Count - 1
+                Dim fl = TryCast(fills(i), Dictionary(Of String, Object))
+                Dim seq = CInt(Val(S(fl, "seq")))
+                Dim mark = If(seq >= 1 AndAlso seq <= 3, marks(seq), seq.ToString())
+                Dim md = S(fl, "md")
+                Dim mw = g.MeasureString(mark, fMark, PointF.Empty, fmt).Width
+                Dim dw = g.MeasureString(md, fNum, PointF.Empty, fmt).Width
+                Dim px = L + colW * i + (colW - mw - 0.6F - dw) / 2
+                Dim ty = lineY + 0.6F + (fillsH - 0.6F - fNum.GetHeight(g)) / 2
+                g.DrawString(mark, fMark, Brushes.Black, px, ty - size * 0.02F, fmt)
+                g.DrawString(md, fNum, Brushes.Black, px + mw + 0.6F, ty, fmt)
+            Next
+        End Using
+    End Sub
+
+    ' 測試列印（系統匣選單）
+    Private Sub TestPrint()
+        Try
+            Dim label As New Dictionary(Of String, Object) From {
+                {"order_no", "26111400057"}, {"order_no_fmt", "261114-0005-7"}, {"patient_name", "測試病人"},
+                {"hospital", "台大"}, {"dept", "心臟血管內科"}, {"phone", "0912345678"}, {"notify", "LINE通知"},
+                {"fills", New ArrayList From {
+                    New Dictionary(Of String, Object) From {{"seq", 2}, {"md", "12/02"}},
+                    New Dictionary(Of String, Object) From {{"seq", 3}, {"md", "12/30"}}}}}
+            Dim p = PrintLabel(label, 1)
+            Tray.ShowBalloonTip(2000, "RxBridge", $"已送出測試貼紙到「{p}」", ToolTipIcon.Info)
+        Catch ex As Exception
+            MessageBox.Show(ex.Message, "RxBridge 測試列印失敗", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
 
 End Module

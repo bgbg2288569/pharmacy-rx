@@ -18,7 +18,7 @@ export default {
     const printMode = ref(getPrintMode());
     watch(printMode, m => { setPrintMode(m); toast('本機列印格式已更新', 'ok', 1200); });
     const s = reactive({
-      notify_template: '', receipt_footer: '', prep_days_ahead: 7, bridge_url: '',
+      notify_template: '', receipt_footer: '', prep_days_ahead: 7, bridge_url: '', bridge_print: true,
       default_notify: [], default_hospital_code: '', default_hospital_name: '', default_dept_code: '', default_dept_name: '',
       quick_depts: [], cancel_reasons: [], last_prep_date: '',
     });
@@ -31,7 +31,7 @@ export default {
     const newReason = ref('');
     const bridgeTest = ref('');
     const busy = ref(false);
-    const SKEYS = ['notify_template', 'receipt_footer', 'prep_days_ahead', 'bridge_url', 'default_notify', 'default_hospital_code',
+    const SKEYS = ['notify_template', 'receipt_footer', 'prep_days_ahead', 'bridge_url', 'bridge_print', 'default_notify', 'default_hospital_code',
       'default_hospital_name', 'default_dept_code', 'quick_depts', 'cancel_reasons', 'last_prep_date'];
 
     const quickKey = l => l.map(x => [x.quick_code, x.hospital_code, x.label || '', x.default_dept || '']);
@@ -55,7 +55,7 @@ export default {
       const st = curStore()?.settings || {};
       Object.assign(s, {
         notify_template: st.notify_template || '', receipt_footer: st.receipt_footer || '',
-        prep_days_ahead: st.prep_days_ahead ?? storeSetting('prep_days_ahead', 7), bridge_url: st.bridge_url || '',
+        prep_days_ahead: st.prep_days_ahead ?? storeSetting('prep_days_ahead', 7), bridge_url: st.bridge_url || '', bridge_print: st.bridge_print !== false,
         default_notify: [...(st.default_notify || [])], default_hospital_code: st.default_hospital_code || '',
         default_hospital_name: st.default_hospital_name || '', default_dept_code: st.default_dept_code || '', default_dept_name: '',
         quick_depts: [...(st.quick_depts || [])], cancel_reasons: [...(st.cancel_reasons || DEFAULT_CANCEL_REASONS)],
@@ -264,6 +264,8 @@ export default {
       <div class="sethead"><h3><i class="sl"></i>藥局系統連線（RxBridge）</h3><span class="hint">沒有就留空</span></div>
       <div class="setrow"><label>連線網址</label><div class="inline" style="max-width:520px"><input class="inp" v-model="s.bridge_url" placeholder="http://localhost:5880"><button class="btn" @click="testBridge">測試連線</button></div></div>
       <div class="setrow"><label></label><div class="hint">{{bridgeTest || '福原藥局：在櫃台電腦執行 RxBridge 後填 http://localhost:5880，輸入姓名時即可查詢藥局系統病人資料。'}}</div></div>
+      <div class="setrow"><label>貼紙列印</label><div><label class="ck"><input type="checkbox" v-model="s.bridge_print"> 4×3 貼紙交給 RxBridge 直接列印（不跳列印視窗）</label>
+        <div class="hint">印表機在 RxBridge.ini 的 LabelPrinter 設定；RxBridge 沒開時會自動改用瀏覽器列印。</div></div></div>
     </section>
     <UnsavedBar :dirty="dirty" :busy="busy" :count="dirtyParts.length" @save="saveAll" @discard="discard" />
   </div>`,

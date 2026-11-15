@@ -1,6 +1,6 @@
 // 列印：標籤貼紙 4×3cm、發票機 80/58mm、A4 清單。透過隱藏 iframe 列印，不影響主畫面。
 import qrcode from 'qrcode-generator';
-import { curStore, storeSetting, rocOf, mdOf, fullOf, fmtNo, maskPhone, dtOf, CIRCLED, ls, rpc, shortHosp } from './lib.js';
+import { curStore, storeSetting, rocOf, mdOf, fullOf, fmtNo, maskPhone, dtOf, CIRCLED, ls, rpc, shortHosp, bridgeUrl, state, toast } from './lib.js';
 
 // 版面為暫定，之後依實際紙張樣式調整
 export const PRINT_MODES = [
@@ -160,12 +160,41 @@ const CSS = {
 };
 
 /** 列印寄單（mode 省略則用本機設定） */
-export function printOrder(o, fills, mode = getPrintMode(), copies = 1) {
+/** 貼紙要印的內容（與調劑系統 rx_intake 回傳的 label 格式相同），交給 RxBridge 直接列印 */
+export function labelData(o, fills) {
+  return {
+    order_no: o.order_no, order_no_fmt: fmtNo(o.order_no), patient_name: o.patient_name || '',
+    hospital: shortHosp(o.hospital_code, o.hospital_name) || '', dept: o.dept_name || '', phone: o.phone || '',
+    notify: notifyText(o.notify_methods),
+    fills: fillsActive(fills).map(f => ({ seq: f.seq, md: mdOf(f.due_date) })),
+  };
+}
+/** 4×3 貼紙優先送本機 RxBridge 列印（可指定印表機、不跳視窗）；RxBridge 沒開或失敗時改用瀏覽器列印 */
+async function printLabelViaBridge(o, fills, copies) {
+  const u = bridgeUrl();
+  if (!u || !storeSetting('bridge_print', true)) return false;
+  try {
+    const r = await fetch(u + '/print-label', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: labelData(o, fills), copies }), signal: AbortSignal.timeout(6000),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || r.status);
+    toast(`已送出貼紙列印（${j.printer || 'RxBridge'}）`, 'ok', 1500);
+    return true;
+  } catch (e) {
+    toast('RxBridge 列印失敗，改用瀏覽器列印：' + (e.message || e), 'warn', 3500);
+    return false;
+  }
+}
+
+export async function printOrder(o, fills, mode = getPrintMode(), copies = 1) {
+  if (o.id) rpc('rx_log_print', { p_id: o.id, p_mode: mode }).catch(() => {});
+  if (mode === 'label' && state.bridge !== 'off' && await printLabelViaBridge(o, fills, copies)) return;
   const one = mode === 'label' ? labelHtml(o, fills) : mode === 'a5' ? a5Html(o, fills) : receiptHtml(o, fills, 50);
   const css = mode === 'label' ? CSS.label : mode === 'a5' ? CSS.a5 : CSS.receipt;
   const body = Array.from({ length: Math.max(1, copies) }, () => one).join('');
   printHtml(`<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${body}</body></html>`);
-  if (o.id) rpc('rx_log_print', { p_id: o.id, p_mode: mode }).catch(() => {});
 }
 
 /** A4 清單列印（預作未確認清單等） */

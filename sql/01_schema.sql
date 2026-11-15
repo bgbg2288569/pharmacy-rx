@@ -115,6 +115,10 @@ create index if not exists rx_orders_name_trgm on rx_orders using gin (patient_n
 create index if not exists rx_orders_phone on rx_orders (phone);
 -- v1.1：生日（同名同姓辨識）、同行家人（合併通知）
 alter table rx_orders add column if not exists birth_date text;   -- 1986-03-12；醫院隱碼存成 1986-**-12
+-- v1.14：寄單來源（web 網頁、dispensing 調劑系統）與調劑系統送單識別碼（防重複建立）
+alter table rx_orders add column if not exists source text not null default 'web';
+alter table rx_orders add column if not exists client_ref text;
+create unique index if not exists rx_orders_client_ref on rx_orders (store_id, client_ref) where client_ref is not null;
 do $$ begin
   if exists (select 1 from information_schema.columns where table_name = 'rx_orders' and column_name = 'birth_date' and data_type = 'date') then
     drop view if exists rx_fill_view;
@@ -293,15 +297,12 @@ begin
   end loop;
 end $$;
 
-create or replace function rx_create_order(p jsonb, p_staff text) returns jsonb
+-- 建立寄單（核心）：網頁 rx_create_order 與調劑系統 rx_intake 共用；權限與人員由呼叫端先確認
+create or replace function rx_create_order_core(p jsonb, v_store text, v_code text, v_name text) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare v_store text; v_staff record; v_id bigint; v_no text; f jsonb; v_hname text; v_dname text;
+declare v_id bigint; v_no text; f jsonb; v_hname text; v_dname text;
 begin
-  v_store := coalesce(nullif(p->>'store_id', ''), rx_my_store());
-  if not rx_can_store(v_store) then raise exception '沒有此門市的權限'; end if;
   perform rx_validate_payload(p);
-  select * into v_staff from rx_staff_or_raise(v_store, p_staff);
-
   select name into v_hname from rx_hospitals where code = nullif(p->>'hospital_code', '');
   select name into v_dname from rx_departments where code = nullif(p->>'dept_code', '');
 
@@ -312,14 +313,15 @@ begin
   end if;
   insert into rx_orders (order_no, store_id, patient_name, phone, notify_methods, note,
                          hospital_code, hospital_name, dept_code, dept_name, ext_patient_id,
-                         created_staff_code, created_staff_name, birth_date, family_no)
+                         created_staff_code, created_staff_name, birth_date, family_no, source, client_ref)
   values (v_no, v_store, trim(p->>'patient_name'), nullif(p->>'phone', ''),
           array(select jsonb_array_elements_text(p->'notify_methods')),
           nullif(trim(coalesce(p->>'note', '')), ''),
           nullif(p->>'hospital_code', ''), coalesce(v_hname, nullif(p->>'hospital_name', '')),
           nullif(p->>'dept_code', ''), coalesce(v_dname, nullif(p->>'dept_name', '')),
-          nullif(p->>'ext_patient_id', ''), v_staff.code, v_staff.name,
-          nullif(p->>'birth_date', ''), nullif(p->>'family_no', ''))
+          nullif(p->>'ext_patient_id', ''), v_code, v_name,
+          nullif(p->>'birth_date', ''), nullif(p->>'family_no', ''),
+          coalesce(nullif(p->>'source', ''), 'web'), nullif(p->>'client_ref', ''))
   returning id into v_id;
 
   for f in select * from jsonb_array_elements(p->'fills') loop
@@ -332,9 +334,20 @@ begin
   end if;
 
   insert into rx_logs (order_id, store_id, action, detail, staff_code, staff_name)
-  values (v_id, v_store, 'create', p - 'store_id', v_staff.code, v_staff.name);
+  values (v_id, v_store, 'create', p - 'store_id', v_code, v_name);
 
   return jsonb_build_object('id', v_id, 'order_no', v_no);
+end $$;
+
+create or replace function rx_create_order(p jsonb, p_staff text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_store text; v_staff record;
+begin
+  v_store := coalesce(nullif(p->>'store_id', ''), rx_my_store());
+  if not rx_can_store(v_store) then raise exception '沒有此門市的權限'; end if;
+  perform rx_validate_payload(p);
+  select * into v_staff from rx_staff_or_raise(v_store, p_staff);
+  return rx_create_order_core((p - 'source') - 'client_ref', v_store, v_staff.code, v_staff.name);
 end $$;
 
 create or replace function rx_update_order(p_id bigint, p jsonb, p_staff text) returns jsonb
@@ -704,7 +717,7 @@ create or replace function rx_update_store_settings(p_store text, p_settings jso
 language plpgsql security definer set search_path = public as $$
 declare allowed text[] := array['notify_template','bridge_url','prep_days_ahead','receipt_footer',
                                 'default_notify','default_hospital_code','default_hospital_name','default_dept_code','quick_depts',
-                                'cancel_reasons','last_prep_date'];
+                                'cancel_reasons','last_prep_date','bridge_print'];
         clean jsonb := '{}'::jsonb; k text;
 begin
   if not rx_can_store(p_store) then raise exception '沒有此門市的權限'; end if;
@@ -775,6 +788,235 @@ create policy rx_fills_r  on rx_fills  for select to authenticated using (rx_can
 create policy rx_logs_r   on rx_logs   for select to authenticated using (rx_can_store(store_id));
 -- rx_counters 不開放任何 policy
 
+-- ---------------------------------------------------------------------
+-- 8.5 調劑系統串接（v1.14）：門市 API 金鑰 + rx_intake
+--   調劑輸出程式以 anon key 呼叫 /rest/v1/rpc/rx_intake，並帶門市 API 金鑰（只存 SHA-256 雜湊）
+-- ---------------------------------------------------------------------
+create table if not exists rx_api_keys (
+  id                  bigserial primary key,
+  store_id            text not null references rx_stores(id),
+  name                text not null,                       -- 例：福原 調劑電腦
+  key_prefix          text not null,                       -- 顯示用：rxk_1a2b…
+  key_hash            text not null unique,                -- SHA-256(完整金鑰)
+  default_staff_name  text not null default '調劑系統',     -- 未帶人員代碼時的記錄名稱
+  active              boolean not null default true,
+  created_at          timestamptz not null default now(),
+  last_used_at        timestamptz
+);
+alter table rx_api_keys enable row level security;
+drop policy if exists rx_api_keys_r on rx_api_keys;
+drop policy if exists rx_api_keys_w on rx_api_keys;
+create policy rx_api_keys_r on rx_api_keys for select to authenticated using (rx_is_admin());
+create policy rx_api_keys_w on rx_api_keys for update to authenticated using (rx_is_admin()) with check (rx_is_admin());
+
+-- 管理員產生金鑰：完整金鑰只在這一次回傳
+create or replace function rx_api_key_create(p_store text, p_name text) returns text
+language plpgsql security definer set search_path = public as $$
+declare k text;
+begin
+  if not rx_is_admin() then raise exception '只有系統管理員可以產生金鑰'; end if;
+  if not exists (select 1 from rx_stores where id = p_store) then raise exception '找不到門市 %', p_store; end if;
+  k := 'rxk_' || replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+  insert into rx_api_keys (store_id, name, key_prefix, key_hash)
+  values (p_store, coalesce(nullif(trim(p_name), ''), '調劑電腦'), left(k, 10), encode(sha256(convert_to(k, 'UTF8')), 'hex'));
+  return k;
+end $$;
+
+-- 日期：民國 1151114 / 115/11/14、西元 2026-11-14 / 20261114 → date；無法判讀回傳 null
+create or replace function rx_parse_date(t text) returns date
+language plpgsql immutable as $$
+declare m text[];
+begin
+  t := trim(coalesce(t, ''));
+  begin
+    if t ~ '^\d{4}-\d{1,2}-\d{1,2}$' then return t::date; end if;
+    if t ~ '^\d{8}$' then return to_date(t, 'YYYYMMDD'); end if;
+    m := coalesce(regexp_match(t, '^(\d{2,3})(\d{2})(\d{2})$'), regexp_match(t, '^(\d{1,3})[/.-](\d{1,2})[/.-](\d{1,2})$'));
+    if m is not null then return make_date(m[1]::int + 1911, m[2]::int, m[3]::int); end if;
+  exception when others then return null;
+  end;
+  return null;
+end $$;
+
+-- 調劑系統送單：p_dry_run = true 只試算（領藥日、帶出名稱、提醒），不建立
+create or replace function rx_intake(p_key text, p jsonb, p_dry_run boolean default false) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  k rx_api_keys; st rx_stores; v_staff record; o rx_orders;
+  v_phone text; v_mobile text; v_birth date; v_notify text[]; v_memo text;
+  v_hcode text; v_hname text; v_dcode text; v_dname text;
+  v_fills jsonb := '[]'; f jsonb; d date; v_disp date; v_days int; v_cur int; v_total int; v_lead int; n int;
+  v_warn text[] := '{}'; v_last date; v_payload jsonb; v_res jsonb; v_code text; v_sname text;
+  v_field text := null;
+begin
+  select * into k from rx_api_keys where key_hash = encode(sha256(convert_to(coalesce(p_key, ''), 'UTF8')), 'hex') and active;
+  if k.id is null then return jsonb_build_object('ok', false, 'code', 'BAD_KEY', 'message', 'API 金鑰錯誤或已停用'); end if;
+  select * into st from rx_stores where id = k.store_id;
+  update rx_api_keys set last_used_at = now() where id = k.id;
+
+  -- 重送：同一個 client_ref 直接回傳原本的寄單
+  if nullif(trim(p->>'client_ref'), '') is not null then
+    select * into o from rx_orders where store_id = k.store_id and client_ref = trim(p->>'client_ref');
+    if o.id is not null then
+      return rx_intake_result(o.id, true, '{}');
+    end if;
+  end if;
+
+  -- 人員：有帶代碼就驗證；沒帶記為金鑰預設名稱
+  if nullif(trim(p->>'staff_code'), '') is not null then
+    select * into v_staff from rx_resolve_staff(k.store_id, p->>'staff_code');
+    if v_staff.code is null then
+      return jsonb_build_object('ok', false, 'code', 'STAFF_NOT_FOUND', 'field', 'staff_code', 'message', '人員代碼錯誤或未啟用：' || (p->>'staff_code'));
+    end if;
+    v_code := v_staff.code; v_sname := v_staff.name;
+  else
+    v_code := null; v_sname := k.default_staff_name;
+  end if;
+
+  -- 電話：手機（09 開頭 10 碼）優先，其次市話
+  v_phone := regexp_replace(coalesce(p->>'phone', ''), '\D', '', 'g');
+  v_mobile := regexp_replace(coalesce(p->>'mobile', ''), '\D', '', 'g');
+  if v_mobile ~ '^09\d{8}$' then v_phone := v_mobile;
+  elsif v_phone = '' then v_phone := v_mobile; end if;
+
+  if nullif(p->>'birth_date', '') is not null then
+    v_birth := rx_parse_date(p->>'birth_date');
+    if v_birth is null then return jsonb_build_object('ok', false, 'code', 'VALIDATION', 'field', 'birth_date', 'message', '生日格式錯誤：' || (p->>'birth_date')); end if;
+  end if;
+
+  -- 通知方式：指定 > 藥局備註判斷 > 門市預設
+  select coalesce(array_agg(x), '{}') into v_notify from jsonb_array_elements_text(coalesce(p->'notify_methods', '[]')) x
+   where x in ('LINE', '簡訊', '電話', '自取');
+  if cardinality(v_notify) = 0 then
+    v_memo := coalesce(p->>'pharmacy_memo', '');
+    v_notify := array(select m from unnest(array['LINE', '簡訊', '電話']) m
+                      where (m = 'LINE' and v_memo ~* 'line') or (m <> 'LINE' and position(m in v_memo) > 0));
+  end if;
+  if cardinality(v_notify) = 0 then
+    select coalesce(array_agg(x), '{}') into v_notify from jsonb_array_elements_text(coalesce(st.settings->'default_notify', '[]')) x;
+  end if;
+
+  -- 醫院、科別：代碼帶出名稱
+  v_hcode := nullif(trim(p->>'hospital_code'), '');
+  select name into v_hname from rx_hospitals where code = v_hcode;
+  if v_hname is null then v_hname := nullif(trim(p->>'hospital_name'), ''); end if;
+  if v_hname is null and v_hcode is not null then v_hname := v_hcode; end if;
+  v_dcode := nullif(trim(p->>'dept_code'), '');
+  select name into v_dname from rx_departments where code = v_dcode;
+  if v_dname is null then v_dcode := null; v_dname := nullif(trim(p->>'dept_name'), ''); end if;   -- 清單外科別只存名稱
+
+  -- 領藥日：指定 fills 優先；否則依 rx 計算（下一次 = 調劑日 + 天數×間隔 − 提前天數）
+  if jsonb_array_length(coalesce(p->'fills', '[]')) > 0 then
+    for f in select * from jsonb_array_elements(p->'fills') loop
+      d := rx_parse_date(f->>'due_date');
+      if d is null then return jsonb_build_object('ok', false, 'code', 'VALIDATION', 'field', 'fills', 'message', '領藥日格式錯誤：' || coalesce(f->>'due_date', '')); end if;
+      v_fills := v_fills || jsonb_build_object('seq', (f->>'seq')::int, 'due_date', d);
+    end loop;
+  elsif p ? 'rx' then
+    v_disp := rx_parse_date(p->'rx'->>'dispense_date');
+    v_days := nullif(p->'rx'->>'days', '')::int;
+    v_cur := coalesce(nullif(p->'rx'->>'current_seq', '')::int, 1);
+    v_total := coalesce(nullif(p->'rx'->>'total', '')::int, 3);
+    v_lead := coalesce(nullif(p->'rx'->>'lead_days', '')::int, 10);
+    if v_disp is null or coalesce(v_days, 0) <= 0 then
+      return jsonb_build_object('ok', false, 'code', 'VALIDATION', 'field', 'rx', 'message', '調劑日或處方天數錯誤');
+    end if;
+    for n in (v_cur + 1)..least(v_total, 3) loop
+      v_fills := v_fills || jsonb_build_object('seq', n, 'due_date', v_disp + v_days * (n - v_cur) - v_lead);
+    end loop;
+    if jsonb_array_length(v_fills) = 0 then
+      return jsonb_build_object('ok', false, 'code', 'NO_REMAINING_FILL', 'field', 'rx', 'message', '這張慢箋已是最後一次，沒有可寄放的次數');
+    end if;
+  end if;
+
+  v_payload := jsonb_build_object(
+    'patient_name', trim(coalesce(p->>'patient_name', '')),
+    'birth_date', coalesce(to_char(v_birth, 'YYYY-MM-DD'), ''),
+    'phone', v_phone,
+    'notify_methods', to_jsonb(v_notify),
+    'note', left(trim(coalesce(p->>'note', '')), 200),
+    'hospital_code', coalesce(v_hcode, ''), 'hospital_name', coalesce(v_hname, ''),
+    'dept_code', coalesce(v_dcode, ''), 'dept_name', coalesce(v_dname, ''),
+    'ext_patient_id', coalesce(nullif(trim(p->>'ext_patient_id'), ''), ''),
+    'fills', v_fills,
+    'source', 'dispensing', 'client_ref', nullif(trim(p->>'client_ref'), ''));
+
+  -- 提醒：同一病人尚有未完成寄單、領藥日早於最新預作日
+  select coalesce(array_agg(format('%s 已有未完成寄單 %s（%s %s）', x.patient_name,
+           substr(x.order_no, 1, 6) || '-' || substr(x.order_no, 7, 4) || '-' || substr(x.order_no, 11, 1),
+           coalesce(nullif(rx_short_hosp(x.hospital_name), ''), '—'), coalesce(x.dept_name, '—'))), '{}')
+    into v_warn
+    from (select distinct o2.patient_name, o2.order_no, o2.hospital_name, o2.dept_name
+            from rx_orders o2 join rx_fills f2 on f2.order_id = o2.id
+           where o2.store_id = k.store_id and o2.patient_name = v_payload->>'patient_name' and o2.status = 'active'
+             and f2.status in ('pending', 'prepared')
+             and (v_birth is null or o2.birth_date is null or o2.birth_date = to_char(v_birth, 'YYYY-MM-DD'))
+           limit 5) x;
+  v_last := nullif(st.settings->>'last_prep_date', '')::date;
+  if v_last is not null and exists (select 1 from jsonb_array_elements(v_fills) e where (e->>'due_date')::date <= v_last) then
+    v_warn := v_warn || ('有領藥日早於或等於目前最新預作日 ' || to_char(v_last, 'YYYY/MM/DD') || '，請直接打單調劑，勿歸入預作資料夾！');
+  end if;
+
+  -- 檢查（與網頁相同規則）
+  begin
+    perform rx_validate_payload(v_payload);
+  exception when others then
+    return jsonb_build_object('ok', false, 'code', 'VALIDATION', 'message', sqlerrm, 'preview', v_payload);
+  end;
+
+  if p_dry_run then
+    return jsonb_build_object('ok', true, 'dry_run', true, 'store_id', k.store_id, 'store_name', st.name,
+      'staff_name', v_sname, 'preview', v_payload, 'warnings', to_jsonb(v_warn));
+  end if;
+
+  begin
+    v_res := rx_create_order_core(v_payload, k.store_id, v_code, v_sname);
+  exception when unique_violation then
+    -- 同時重送：回傳已建立的那張
+    select * into o from rx_orders where store_id = k.store_id and client_ref = v_payload->>'client_ref';
+    if o.id is not null then return rx_intake_result(o.id, true, '{}'); end if;
+    raise;
+  end;
+  return rx_intake_result((v_res->>'id')::bigint, false, v_warn);
+exception when others then
+  return jsonb_build_object('ok', false, 'code', 'SERVER', 'message', sqlerrm);
+end $$;
+
+-- 醫院簡稱（與網頁 shortHosp 相同規則）
+create or replace function rx_short_hosp(n text) returns text
+language sql immutable as $$
+  select trim(regexp_replace(regexp_replace(regexp_replace(regexp_replace(coalesce(n, ''),
+    '[（(〈【<].*?[）)〉】>]', '', 'g'),
+    '^.*?(醫療財團法人|財團法人|社團法人)', ''),
+    '^(.{2,20}?)基金會(?=.)', ''),
+    '^(行政院國軍退除役官兵輔導委員會|行政院衛生署|衛生福利部|國防部|國立|私立|台灣基督長老教會|基督長老教會|天主教)+', ''));
+$$;
+
+-- 回應內容（含貼紙要印的文字）
+create or replace function rx_intake_result(p_id bigint, p_dup boolean, p_warn text[]) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'ok', true, 'duplicate', p_dup, 'order_id', o.id, 'order_no', o.order_no,
+    'order_no_fmt', substr(o.order_no, 1, 6) || '-' || substr(o.order_no, 7, 4) || '-' || substr(o.order_no, 11, 1),
+    'notify_methods', to_jsonb(o.notify_methods),
+    'fills', coalesce((select jsonb_agg(jsonb_build_object('seq', f.seq, 'due_date', f.due_date,
+               'roc', lpad((extract(year from f.due_date)::int - 1911)::text, 3, '0') || to_char(f.due_date, '/MM/DD')) order by f.seq)
+             from rx_fills f where f.order_id = o.id and f.status <> 'cancelled'), '[]'),
+    'warnings', to_jsonb(coalesce(p_warn, '{}')),
+    'label', jsonb_build_object(
+      'order_no', o.order_no,
+      'order_no_fmt', substr(o.order_no, 1, 6) || '-' || substr(o.order_no, 7, 4) || '-' || substr(o.order_no, 11, 1),
+      'patient_name', o.patient_name,
+      'hospital', coalesce((select q.label from rx_hospital_quick q where q.store_id = o.store_id and q.hospital_code = o.hospital_code and q.label <> '' limit 1), rx_short_hosp(o.hospital_name), ''),
+      'dept', coalesce(o.dept_name, ''),
+      'phone', coalesce(o.phone, ''),
+      'notify', case when cardinality(array_remove(o.notify_methods, '自取')) > 0
+                     then array_to_string(array_remove(o.notify_methods, '自取'), '/') || '通知' else '自取' end,
+      'fills', coalesce((select jsonb_agg(jsonb_build_object('seq', f.seq, 'md', to_char(f.due_date, 'MM/DD')) order by f.seq)
+                 from rx_fills f where f.order_id = o.id and f.status <> 'cancelled'), '[]')))
+  from rx_orders o where o.id = p_id;
+$$;
+
 -- RPC 權限：只給登入者（只處理 rx_ 函式，不影響同專案其他系統）
 do $$
 declare r record;
@@ -790,8 +1032,10 @@ grant execute on function rx_create_order(jsonb, text), rx_update_order(bigint, 
   rx_dashboard(text, date, date, int), rx_update_store_settings(text, jsonb), rx_due_counts(text, date, date),
   rx_link_family(bigint, bigint, text), rx_unlink_family(bigint, text),
   rx_resolve_staff(text, text), rx_is_admin(), rx_my_store(), rx_can_store(text),
-  rx_luhn(text), rx_valid_order_no(text)
+  rx_luhn(text), rx_valid_order_no(text), rx_api_key_create(text, text)
 to authenticated;
+-- 調劑系統（anon key）只能呼叫 rx_intake，函式內部以門市 API 金鑰驗證
+grant execute on function rx_intake(text, jsonb, boolean) to anon, authenticated;
 grant select on rx_fill_view to authenticated;
 
 -- ---------------------------------------------------------------------

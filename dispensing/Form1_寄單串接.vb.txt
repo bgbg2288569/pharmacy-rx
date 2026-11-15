@@ -1,0 +1,60 @@
+' =====================================================================
+' 加到 Form1.vb 的程式（調劑輸出程式）：右鍵選單「建立寄單」
+' 1. 在 DataGridView1 的右鍵選單（ContextMenuStrip）新增一個項目，名稱 建立寄單ToolStripMenuItem
+' 2. 把下面這段貼進 Form1 類別（例如放在 #Region "右鍵選單" 裡）
+' 3. settings 資料表新增 4 個設定值（可放在 FormSetting）：
+'      RxApiUrl  = https://<專案代碼>.supabase.co/rest/v1/rpc/rx_intake
+'      RxAnonKey = Supabase anon key（寄單網頁「系統管理 › 調劑串接」可複製）
+'      RxApiKey  = 門市 API 金鑰 rxk_...（同一頁產生）
+'      RxBridgeUrl = http://localhost:5880（可省略）
+' 4. 專案加入參考：System.Net.Http、System.Web.Extensions；加入 FormRxDeposit.vb
+' =====================================================================
+Private Sub 建立寄單ToolStripMenuItem_Click(sender As Object, e As EventArgs) Handles 建立寄單ToolStripMenuItem.Click
+    If DataGridView1.SelectedRows.Count = 0 Then Return
+    Dim row As DataGridViewRow = DataGridView1.SelectedRows(0)
+    Dim fileName As String = GetCellValue(row, COL1_FILE_NAME)
+    Dim fileTime As String = GetCellValue(row, COL1_FILE_TIME)
+    Dim ptId As String = GetCellValue(row, COL1_PATIENT_ID)
+    If String.IsNullOrEmpty(fileName) Then Return
+
+    Dim apiUrl As String = LoadSetting("RxApiUrl", "")
+    Dim apiKey As String = LoadSetting("RxApiKey", "")
+    If String.IsNullOrWhiteSpace(apiUrl) OrElse String.IsNullOrWhiteSpace(apiKey) Then
+        MessageBox.Show("尚未設定寄單系統串接（RxApiUrl、RxApiKey），請到設定頁設定。", "建立寄單", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+        Return
+    End If
+
+    ' 處方 XML（與列印相同：依檔名＋檔案時間）
+    Dim xmlContent As String = ""
+    Using connection As SQLiteConnection = GetDbConnection()
+        connection.Open()
+        Using command As New SQLiteCommand("SELECT xml_content FROM prescriptions WHERE file_name = @fn AND file_time = @ft", connection)
+            command.Parameters.AddWithValue("@fn", fileName)
+            command.Parameters.AddWithValue("@ft", fileTime)
+            Dim r As Object = command.ExecuteScalar()
+            If r IsNot Nothing AndAlso Not IsDBNull(r) Then xmlContent = r.ToString()
+        End Using
+    End Using
+    If String.IsNullOrEmpty(xmlContent) Then xmlContent = GetXmlContentFromDatabase(fileName)
+    If String.IsNullOrEmpty(xmlContent) Then
+        MessageBox.Show("讀不到這張處方的 XML 內容", "建立寄單", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+        Return
+    End If
+
+    ' 藥局備註（判斷通知方式）
+    Dim memo As String = ""
+    Try
+        memo = FetchAllergyText(ptId)
+    Catch ex As Exception
+        Debug.WriteLine($"[建立寄單] 讀取藥局備註失敗: {ex.Message}")
+    End Try
+
+    Using frm As New FormRxDeposit() With {
+            .ApiUrl = apiUrl,
+            .AnonKey = LoadSetting("RxAnonKey", ""),
+            .ApiKey = apiKey,
+            .BridgeUrl = LoadSetting("RxBridgeUrl", "http://localhost:5880")}
+        frm.LoadFromPrescription(xmlContent, fileName, fileTime, memo, label_hospital.Text, TextBox_Date.Text)
+        frm.ShowDialog(Me)
+    End Using
+End Sub
