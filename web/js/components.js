@@ -5,6 +5,7 @@ import {
   parseRocInput, rocOf, fullOf, weekOf, addDays, todayISO, diffDays, dtOf, dayOf, fmtNo, onlyDigits, debounce,
   findStaff, askStaff, bridgeSearch, bump, storeSetting, isoOf, parseISO, fillTpl, copyText, shortHosp, ageOf, birthOf, selfOnly,
   parseBirthInput, birthMatch, isMasked, focusNext, askConfirm, DEFAULT_CANCEL_REASONS, loadStoreData, useDirty, notifyFromMemo,
+  parseRxQr, looksLikeRxQr, bridgeMatch,
 } from './lib.js';
 import { printOrder, getPrintMode, setPrintMode, PRINT_MODES } from './print.js';
 
@@ -416,6 +417,64 @@ export const OrderForm = {
     const phoneReq = computed(() => f.notify_methods.some(m => m === '簡訊' || m === '電話'));
     const onPhone = e => { f.phone = onlyDigits(e.target.value); e.target.value = f.phone; };
 
+    // 藥局系統客戶 → 建議清單列
+    const extRow = (p, hit) => ({
+      src: 'p', patient_name: p.name, phone: onlyDigits(p.phone), phones: (p.phones || []).map(x => onlyDigits(x)).filter(Boolean),   // 注意：不可直接 map(onlyDigits)，第二個參數會被當成長度
+      birth_date: (p.birthday || '').slice(0, 10), ext_patient_id: p.ext_id || '', idno: p.idno || p.id_mask || '',
+      memo: p.memo || '', notify_methods: notifyFromMemo(p.memo), inHist: hit,
+    });
+
+    // ---- 掃描紙本處方箋 QR（直接刷在姓名欄）：帶入院所、科別、生日，並以身分證／生日（隱碼當萬用字元）找病人 ----
+    const qr = ref(null);               // 目前這張處方的 QR 內容（選病人後院所、科別以它為準）
+    const qrMode = ref(false);          // 建議清單目前是 QR 比對結果
+    let qrSeq = 0;
+    async function doScan(raw) {
+      const p = parseRxQr(raw);
+      f.patient_name = '';              // QR 很長，處理後一律清空姓名欄
+      if (!p) { toast('不是處方箋 QR 格式，請重新掃描', 'err'); return; }
+      const my = ++qrSeq;
+      seqNo++;                          // 取消尚未回來的姓名自動完成查詢
+      // 新的處方 = 新的病人：清空表單；若正在寄同行家人，保留電話、通知方式與同行連結
+      const fam = family.value, keepPhone = f.phone, keepNotify = [...f.notify_methods];
+      load(null); openOrders.value = [];
+      for (const k of Object.keys(errs)) delete errs[k];
+      if (fam) { family.value = fam; f.phone = keepPhone; f.notify_methods = keepNotify; }
+      // 科別：清單內才帶入；院所：資料庫有此代碼才帶入，否則空白
+      const d = state.depts.find(x => x.code === p.dept_code);
+      p.dept_name = d ? d.name : ''; p.hospital_name = '';
+      f.dept_code = d ? d.code : ''; f.dept_name = p.dept_name;
+      f.birth_date = p.birth_date || '';
+      qr.value = p; qrMode.value = true;
+      sugg.value = []; suggIdx.value = -1; extLoading.value = true; suggOpen.value = true;
+      const hospP = q(sb.from('rx_hospitals').select('code,name').eq('code', p.hospital_code).limit(1)).catch(() => []);
+      const ext = await bridgeMatch(p.idno, p.birth_date);
+      const names = [...new Set([...ext.map(x => x.name).filter(Boolean), ...(p.nameOk ? [p.name] : [])])];
+      const [hosp, hist] = await Promise.all([
+        hospP,
+        rpc('rx_patient_match', {
+          p_store: state.storeId, p_birth: p.birth_date || null,
+          p_ext_ids: ext.map(x => x.ext_id).filter(Boolean), p_names: names,
+        }).catch(() => []),
+      ]);
+      if (my !== qrSeq) return;
+      if (hosp[0]) p.hospital_name = hosp[0].name;
+      f.hospital_code = hosp[0] ? p.hospital_code : ''; f.hospital_name = p.hospital_name;
+      const inHist = x => hist.some(h => (h.ext_patient_id && h.ext_patient_id === x.ext_id) ||
+        (h.patient_name === x.name && birthMatch(h.birth_date, (x.birthday || '').slice(0, 10))));
+      // 寄單紀錄：客戶代號／姓名相符優先；只有生日相符的排最後
+      const histRows = hist.map(h => ({ ...h, src: 'h', weak: !h.match_level }));
+      const extRows = ext.map((x, i) => ({ x, i, hit: inHist(x), same: p.nameOk && x.name === p.name }))
+        .sort((a, b) => (b.same - a.same) || (b.hit - a.hit) || (a.i - b.i)).slice(0, 15).map(({ x, hit }) => extRow(x, hit));
+      extLoading.value = false;
+      sugg.value = [...histRows.filter(h => !h.weak), ...extRows, ...histRows.filter(h => h.weak)];
+      suggIdx.value = sugg.value.length ? 0 : -1;
+      suggOpen.value = true;            // 沒有結果也顯示「查無相符病人」
+      nextTick(() => nameEl.value?.focus());
+    }
+    // 掃描槍多數最後會送 Enter；沒有 Enter 的掃描槍，停止輸入 0.4 秒後自動處理
+    const nameQr = debounce(() => { if (looksLikeRxQr(f.patient_name)) doScan(f.patient_name); }, 400);
+    const isQrText = t => /^\s*[0-9A-Z]{10}\s*;/i.test(t || '');
+
     // ---- 姓名自動完成：本系統紀錄 + 藥局系統 ----
     let seqNo = 0;
     const doSuggest = debounce(async s => {
@@ -442,16 +501,16 @@ export const OrderForm = {
       sugg.value = [
         ...histRows,
         // 藥局系統：有寄單紀錄的客戶排最前面，其餘（一般處方箋客戶）排後面
-        ...ext.map((p, i) => ({ p, i, hit: inHist(p) })).sort((a, b) => (b.hit - a.hit) || (a.i - b.i)).slice(0, 12).map(({ p, hit }) => ({
-          src: 'p', patient_name: p.name, phone: onlyDigits(p.phone), phones: (p.phones || []).map(x => onlyDigits(x)).filter(Boolean),   // 注意：不可直接 map(onlyDigits)，第二個參數會被當成長度
-          birth_date: (p.birthday || '').slice(0, 10), ext_patient_id: p.ext_id || '', idno: p.idno || p.id_mask || '',
-          memo: p.memo || '', notify_methods: notifyFromMemo(p.memo), inHist: hit,
-        })),
+        ...ext.map((p, i) => ({ p, i, hit: inHist(p) })).sort((a, b) => (b.hit - a.hit) || (a.i - b.i)).slice(0, 12).map(({ p, hit }) => extRow(p, hit)),
       ];
       suggIdx.value = keepIdx;
       if (document.activeElement === nameEl.value) suggOpen.value = sugg.value.length > 0;
     }, 220);
-    const onName = () => { openOrders.value = []; extMemo.value = ''; extPhones.value = []; if (!edit.value) doSuggest(f.patient_name.trim()); };
+    const onName = () => {
+      if (!edit.value && isQrText(f.patient_name)) { suggOpen.value = false; nameQr(); return; }   // 刷處方 QR
+      qrMode.value = false;
+      openOrders.value = []; extMemo.value = ''; extPhones.value = []; if (!edit.value) doSuggest(f.patient_name.trim());
+    };
     function pickSugg(s, phone) {
       if (!s) return;
       f.patient_name = s.patient_name;
@@ -470,7 +529,14 @@ export const OrderForm = {
         if (s.notify_methods.length) f.notify_methods = [...s.notify_methods];
         extMemo.value = s.memo || '';
       }
-      suggOpen.value = false;
+      // 掃過處方 QR：院所、科別一律以這張處方為準（資料庫沒有就空白）；生日：病人資料沒有時用 QR 的
+      const p = qr.value;
+      if (p) {
+        f.hospital_code = p.hospital_name ? p.hospital_code : ''; f.hospital_name = p.hospital_name || '';
+        f.dept_code = p.dept_name ? p.dept_code : ''; f.dept_name = p.dept_name || '';
+        if (!f.birth_date && p.birth_date) f.birth_date = p.birth_date;
+      }
+      suggOpen.value = false; qrMode.value = false;
       checkOpen();
       nextTick(() => {   // 帶入後跳到第一個需要填的欄位
         const sel = [f.notify_methods.length ? null : '[data-k=notify] button', f.hospital_name ? null : '[data-k=hosp] input', '[data-k=d2] input.t'].find(Boolean);
@@ -478,6 +544,12 @@ export const OrderForm = {
       });
     }
     function onNameKey(e) {
+      if (!edit.value && isQrText(f.patient_name)) {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); doScan(f.patient_name); }
+        else if (e.key === 'Escape') { e.preventDefault(); f.patient_name = ''; }   // 刷錯：Esc 一次清空
+        return;
+      }
+      if (e.key === 'Escape' && qrMode.value) { suggOpen.value = false; return; }
       if (!suggOpen.value || !sugg.value.length) return;
       if (e.key === 'ArrowDown') { e.preventDefault(); suggIdx.value = (suggIdx.value + 1) % sugg.value.length; }
       else if (e.key === 'ArrowUp') { e.preventDefault(); suggIdx.value = suggIdx.value <= 0 ? sugg.value.length - 1 : suggIdx.value - 1; }
@@ -607,7 +679,7 @@ export const OrderForm = {
       } catch (e) { toastErr(e); } finally { saving.value = false; }
     }
     function reset() {
-      load(null); openOrders.value = []; sugg.value = [];
+      load(null); openOrders.value = []; sugg.value = []; qr.value = null; qrMode.value = false; qrSeq++;
       for (const k of Object.keys(errs)) delete errs[k];
       nextTick(() => nameEl.value?.focus());
     }
@@ -635,6 +707,7 @@ export const OrderForm = {
     onBeforeUnmount(() => window.removeEventListener('keydown', onHotkey));
 
     return {
+      qr, qrMode,
       extPhones, extLoading, extMemo, state, root, nameEl, f, family, errs, saving, sugg, suggOpen, suggIdx, openOrders, sameNameOther, edit, printMode, PRINT_MODES,
       phoneReq, quickDepts, fillOf, onBtnKey, NOTIFY_CLS, onPhone, onName, pickSugg, onNameKey, onNameBlur, hasPhrase, togglePhrase, onHospPick, pickQuick,
       pickDept, onFormKey, save, reset, checkOpen, FILL_STATUS, fmtNo, dayOf, rocOf, shortHosp, birthOf, ageOf, fullOf, emit,
@@ -649,9 +722,12 @@ export const OrderForm = {
             @input="onName" @keydown="onNameKey" @blur="onNameBlur"
             @focus="sugg.length && (suggOpen = true)">
           <div class="dd sugg" v-if="suggOpen">
+            <div class="qrinfo" v-if="qrMode && qr">處方 QR｜院所 <b class="num">{{qr.hospital_code}}</b> {{ qr.hospital_name || (extLoading ? '…' : '（無資料）') }}
+              ｜科別 <b class="num">{{qr.dept_code || '—'}}</b> {{ qr.dept_name || '（不在清單）' }}
+              ｜<b class="num">{{qr.idno || qr.idno_raw || '—'}}</b>｜<b class="num">{{ qr.birth_date ? fullOf(qr.birth_date) : (qr.birth_raw || '—') }}</b></div>
             <template v-for="(s,i) in sugg" :key="i">
-            <div class="sgh" :class="s.src" v-if="i===0 || sugg[i-1].src!==s.src">
-              {{ s.src==='h' ? '寄單紀錄（本系統）' : '藥局系統客戶資料（調劑系統）' }}</div>
+            <div class="sgh" :class="s.src" v-if="i===0 || sugg[i-1].src!==s.src || sugg[i-1].weak!==s.weak">
+              {{ s.src==='h' ? (s.weak ? '寄單紀錄（僅生日相符，請確認）' : '寄單紀錄（本系統）') : (qrMode ? '藥局系統客戶資料（身分證／生日相符）' : '藥局系統客戶資料（調劑系統）') }}</div>
             <div class="it" :class="[{on:i===suggIdx}, 'from-'+s.src]" @mousedown.prevent="pickSugg(s)">
               <span class="src" :class="s.src">{{ s.src==='h' ? '紀錄' : '藥局' }}</span>
               <div class="grow">
@@ -674,6 +750,7 @@ export const OrderForm = {
             </div>
             </template>
             <div class="sgh p" v-if="extLoading">藥局系統查詢中…</div>
+            <div class="empty" v-else-if="qrMode && !sugg.length">查無相符病人（新客戶？），請直接輸入姓名</div>
           </div>
         </div>
       </div>

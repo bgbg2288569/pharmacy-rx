@@ -618,3 +618,6 @@ table.kv td:first-child{color:var(--muted);white-space:nowrap;font-weight:700}
 label.ck{display:inline-flex;gap:6px;align-items:center;font-weight:700;cursor:pointer}
 /* v1.14.2 軌跡：調劑輸出系統匯入 */
 .tlr.a-intake .act{color:var(--blue-ink)}
+
+/* 掃描紙本處方箋 QR（刷在姓名欄）：建議清單最上方顯示處方內容 */
+.dd.sugg .qrinfo{font-size:12.5px;color:var(--ink);background:#fff7ec;border-radius:10px;padding:6px 10px;margin-bottom:4px;white-space:normal}

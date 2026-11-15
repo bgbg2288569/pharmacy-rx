@@ -1,5 +1,5 @@
 ' =====================================================================
-' RxBridge — 本地藥局系統橋接程式（福原藥局 ODBC → 網頁）
+' RxBridge寄單系統串接 — 本地藥局系統橋接程式（福原藥局 ODBC → 寄單網頁、調劑輸出程式；貼紙列印）
 ' 在櫃台電腦背景執行，網頁輸入姓名時呼叫 http://localhost:5880/patients?q=王
 ' 由這支程式透過 ODBC 查藥局系統，回傳 JSON。資料只在本機與瀏覽器之間傳遞，不經過雲端。
 '
@@ -24,6 +24,7 @@ Imports System.Drawing.Printing
 Imports QRCoder
 
 Module RxBridge
+    Public Const AppName As String = "RxBridge寄單系統串接"
 
     Private ReadOnly Cfg As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
     Private Listener As HttpListener
@@ -40,10 +41,10 @@ Module RxBridge
             BuildTray()
             Try
                 StartServer()
-                Tray.ShowBalloonTip(3000, "RxBridge", $"藥局系統橋接已啟動（埠 {Cfg("Port")}）", ToolTipIcon.Info)
+                Tray.ShowBalloonTip(3000, AppName, $"已啟動（埠 {Cfg("Port")}）", ToolTipIcon.Info)
             Catch ex As HttpListenerException
                 MessageBox.Show($"無法啟動 http://localhost:{Cfg("Port")}/" & vbCrLf & ex.Message & vbCrLf & vbCrLf &
-                                "請以系統管理員身分執行一次 setup_urlacl.bat。", "RxBridge", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                                "請以系統管理員身分執行一次 setup_urlacl.bat。", AppName, MessageBoxButtons.OK, MessageBoxIcon.Error)
                 Return
             End Try
             Application.Run()
@@ -82,13 +83,13 @@ Module RxBridge
 
     ' ---------------------------------------------------------------- 系統匣
     Private Sub BuildTray()
-        Tray = New NotifyIcon() With {.Icon = AppIcon(), .Text = "RxBridge 藥局系統橋接", .Visible = True}
+        Tray = New NotifyIcon() With {.Icon = AppIcon(), .Text = AppName, .Visible = True}
         Dim menu As New ContextMenuStrip()
         menu.Items.Add("測試查詢…", Nothing, Sub() TestQuery())
         menu.Items.Add("測試列印貼紙", Nothing, Sub() TestPrint())
         menu.Items.Add("重新載入設定", Nothing, Sub()
                                                LoadConfig()
-                                               Tray.ShowBalloonTip(2000, "RxBridge", "設定已重新載入", ToolTipIcon.Info)
+                                               Tray.ShowBalloonTip(2000, AppName, "設定已重新載入", ToolTipIcon.Info)
                                            End Sub)
         menu.Items.Add("結束", Nothing, Sub() Application.Exit())
         Tray.ContextMenuStrip = menu
@@ -106,13 +107,13 @@ Module RxBridge
     End Function
 
     Private Sub TestQuery()
-        Dim q = Microsoft.VisualBasic.Interaction.InputBox("輸入姓名、電話、民國生日或身分證字號：", "RxBridge 測試", "王")
+        Dim q = Microsoft.VisualBasic.Interaction.InputBox("輸入姓名、電話、民國生日或身分證字號：", AppName & " 測試查詢", "王")
         If String.IsNullOrWhiteSpace(q) Then Return
         Try
             Dim rows = SearchPatients(q)
-            MessageBox.Show($"取得 {rows.Count} 筆" & vbCrLf & Json.Serialize(rows), "RxBridge 測試")
+            MessageBox.Show($"取得 {rows.Count} 筆" & vbCrLf & Json.Serialize(rows), AppName & " 測試查詢")
         Catch ex As Exception
-            MessageBox.Show(ex.Message, "RxBridge 測試失敗", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            MessageBox.Show(ex.Message, AppName & " 測試查詢失敗", MessageBoxButtons.OK, MessageBoxIcon.Error)
         End Try
     End Sub
 
@@ -154,13 +155,18 @@ Module RxBridge
 
             Select Case req.Url.AbsolutePath.TrimEnd("/"c).ToLowerInvariant()
                 Case "/health"
-                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.4.0"})
+                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.5.0"})
                 Case "/patients"
                     ' 注意：不能用 req.QueryString —— .NET Framework 會用系統預設編碼（Big5）解碼網址，
                     ' 中文會變亂碼，送進 ODBC 後變成一串 ?，反而查到一堆含 ? 的姓名。這裡自己用 UTF-8 解碼。
                     Dim q = QueryParam(req.Url.Query, "q").Trim()
                     If q.Length = 0 Then Reply(res, 200, New List(Of Object)) : Return
                     Reply(res, 200, SearchPatients(q))
+                Case "/match"
+                    ' 處方箋 QR 比對：idno 可含 *（隱碼），birth 為西元 yyyy-MM-dd，月／日可為 **
+                    Dim idno = QueryParam(req.Url.Query, "idno").Trim().ToUpperInvariant()
+                    Dim birth = QueryParam(req.Url.Query, "birth").Trim()
+                    Reply(res, 200, MatchPatients(idno, birth))
                 Case "/print-label"
                     If req.HttpMethod <> "POST" Then Reply(res, 405, New With {.error = "請用 POST"}) : Return
                     Dim body As String
@@ -246,13 +252,71 @@ Module RxBridge
         Return list
     End Function
 
+    ' ---------------------------------------------------------------- 處方箋 QR 比對
+    ' idno：A123456789（完整）或 A123***481（* 為隱碼）；birth：1966-03-26 或 1966-**-26
+    '   身分證完整 → QueryIdno（精確）
+    '   身分證有隱碼 → QueryMatch（idno LIKE ? AND birthday LIKE ?），隱碼換成 _，沒有生日時生日帶 %
+    '   只有生日（完整）→ QueryBirth；生日有隱碼 → QueryMatch，身分證帶 %
+    Private ReadOnly IdnoMaskRx As New Regex("^[A-Z*][A-D0-9*][0-9*]{8}$")
+    Private ReadOnly BirthMaskRx As New Regex("^(\d{4})-(\d{2}|\*\*)-(\d{2}|\*\*)$")
+    Private Function MatchPatients(idno As String, birth As String) As List(Of Dictionary(Of String, Object))
+        Dim result As New List(Of Dictionary(Of String, Object))
+        If Not IdnoMaskRx.IsMatch(idno) OrElse idno.Count(Function(c) c = "*"c) > 6 Then idno = ""
+        Dim bm = BirthMaskRx.Match(birth)
+        Dim birthFull = "", birthLike = "%"
+        If bm.Success Then
+            If bm.Groups(2).Value <> "**" AndAlso bm.Groups(3).Value <> "**" Then
+                birthFull = $"{bm.Groups(1).Value}/{bm.Groups(2).Value}/{bm.Groups(3).Value}"
+            End If
+            ' 分隔符號也用 _，不論藥局系統存 1966/03/26 或 1966-03-26 都比對得到
+            birthLike = $"{bm.Groups(1).Value}_{bm.Groups(2).Value.Replace("*", "_")}_{bm.Groups(3).Value.Replace("*", "_")}"
+        End If
+        If idno = "" AndAlso birthLike = "%" Then Return result
+
+        Dim jobKey As String, ps As String()
+        If idno <> "" AndAlso Not idno.Contains("*") Then
+            jobKey = "QueryIdno" : ps = {idno}
+        ElseIf idno <> "" Then
+            jobKey = "QueryMatch" : ps = {idno.Replace("*", "_"), birthLike}
+        ElseIf birthFull <> "" Then
+            jobKey = "QueryBirth" : ps = {birthFull}
+        Else
+            jobKey = "QueryMatch" : ps = {"%", birthLike}
+        End If
+        Dim sql = If(Cfg.ContainsKey(jobKey), Cfg(jobKey), "")
+        If String.IsNullOrWhiteSpace(sql) Then Throw New ApplicationException($"RxBridge.ini 尚未設定 {jobKey}")
+        Dim max = Math.Max(1, Math.Min(200, CInt(Val(Cfg("MaxRows")))))
+        Dim byId As New Dictionary(Of String, Dictionary(Of String, Object))
+        Using cn As New OdbcConnection(Cfg("ConnectionString"))
+            cn.Open()
+            RunQuery(cn, sql, ps, byId, result, max)
+            ' 身分證完整但藥局系統查不到（例：新客戶身分證未建檔），改用生日找
+            If result.Count = 0 AndAlso jobKey = "QueryIdno" AndAlso birthLike <> "%" Then
+                Dim k2 = If(birthFull <> "", "QueryBirth", "QueryMatch")
+                Dim sql2 = If(Cfg.ContainsKey(k2), Cfg(k2), "")
+                If Not String.IsNullOrWhiteSpace(sql2) Then
+                    RunQuery(cn, sql2, If(birthFull <> "", New String() {birthFull}, New String() {"%", birthLike}), byId, result, max)
+                End If
+            End If
+        End Using
+        Return result
+    End Function
+
     Private Sub RunQuery(cn As OdbcConnection, sql As String, param As String,
+                         byId As Dictionary(Of String, Dictionary(Of String, Object)),
+                         list As List(Of Dictionary(Of String, Object)), max As Integer)
+        RunQuery(cn, sql, New String() {param}, byId, list, max)
+    End Sub
+
+    ' 參數只有一個時，每個 ? 都綁同一個值；多個時依序對應
+    Private Sub RunQuery(cn As OdbcConnection, sql As String, params As String(),
                          byId As Dictionary(Of String, Dictionary(Of String, Object)),
                          list As List(Of Dictionary(Of String, Object)), max As Integer)
         Using cmd As New OdbcCommand(sql, cn)
             cmd.CommandTimeout = 5
-            For i = 1 To sql.Count(Function(c) c = "?"c)
-                cmd.Parameters.Add(New OdbcParameter() With {.Value = param})
+            Dim n = sql.Count(Function(c) c = "?"c)
+            For i = 0 To n - 1
+                cmd.Parameters.Add(New OdbcParameter() With {.Value = If(params.Length = 1, params(0), params(Math.Min(i, params.Length - 1)))})
             Next
             Using rd = cmd.ExecuteReader()
                 While rd.Read()
@@ -276,7 +340,7 @@ Module RxBridge
                         Dim d = New String(t.Where(AddressOf Char.IsDigit).ToArray())
                         If d.Length >= 7 AndAlso Not phones.Contains(d) Then phones.Add(d)
                     Next
-                    Dim mobile = phones.FirstOrDefault(Function(t) t.StartsWith("09"))
+                    Dim mobile = phones.FirstOrDefault(Function(ph) ph.StartsWith("09"))
                     Dim row As New Dictionary(Of String, Object) From {
                         {"ext_id", id},
                         {"name", Get1(raw, "name")},
@@ -406,6 +470,12 @@ Module RxBridge
         Dim fillsH = 6.4F                               ' 下方領藥日區高度
         Dim lineY = h - 0.8F - fillsH                   ' 粗線位置
         Dim qrSize = Math.Min(15.0F, lineY - T - 3.0F)  ' QR 邊長（下方留編號空間）
+        ' QR 往下移（ini LabelQrDownMm，預設 1.5mm；不超過粗線上方可用空間）
+        Dim qrDown = CSng(Val(If(Cfg.ContainsKey("LabelQrDownMm"), Cfg("LabelQrDownMm"), "1.5")))
+        Dim qrTop = T + Math.Max(0F, Math.Min(qrDown, lineY - T - qrSize - 3.2F))
+        ' 右側文字行距倍率（ini LabelLineSpacing，預設 0.88；原本 0.98）
+        Dim lineSp = CSng(Val(If(Cfg.ContainsKey("LabelLineSpacing"), Cfg("LabelLineSpacing"), "0.88")))
+        If lineSp < 0.6F OrElse lineSp > 1.5F Then lineSp = 0.88F
 
         ' --- QR ＋ 寄單編號 ---
         Dim orderNo = S(label, "order_no")
@@ -416,7 +486,7 @@ Module RxBridge
                         Using bmp = qr.GetGraphic(8, Color.Black, Color.White, False)
                             g.InterpolationMode = InterpolationMode.NearestNeighbor
                             g.PixelOffsetMode = PixelOffsetMode.Half
-                            g.DrawImage(bmp, New RectangleF(L, T, qrSize, qrSize))
+                            g.DrawImage(bmp, New RectangleF(L, qrTop, qrSize, qrSize))
                         End Using
                     End Using
                 End Using
@@ -425,7 +495,7 @@ Module RxBridge
         Dim noText = If(S(label, "order_no_fmt") <> "", S(label, "order_no_fmt"), orderNo)
         Using f = FitFont(g, noText, "Arial", FontStyle.Bold, 2.25F, qrSize + 0.5F)
             Dim sz = g.MeasureString(noText, f, PointF.Empty, fmt)
-            g.DrawString(noText, f, Brushes.Black, L + (qrSize - sz.Width) / 2, T + qrSize + 0.3F, fmt)
+            g.DrawString(noText, f, Brushes.Black, L + (qrSize - sz.Width) / 2, qrTop + qrSize + 0.3F, fmt)
         End Using
 
         ' --- 右側文字欄 ---
@@ -434,12 +504,12 @@ Module RxBridge
         Dim lines As New List(Of Tuple(Of String, String, FontStyle, Single))
         lines.Add(Tuple.Create(S(label, "patient_name"), cjk, FontStyle.Bold, 5.6F))
         For Each k In {"hospital", "dept", "phone", "notify"}
-            Dim t = S(label, k)
-            If t <> "" Then lines.Add(Tuple.Create(t, If(k = "phone", "Arial", cjk), FontStyle.Bold, 3.0F))
+            Dim txt = S(label, k)
+            If txt <> "" Then lines.Add(Tuple.Create(txt, If(k = "phone", "Arial", cjk), FontStyle.Bold, 3.0F))
         Next
         ' 先算總高度，垂直置中於 QR 區
         Dim fonts = lines.Select(Function(ln) FitFont(g, ln.Item1, ln.Item2, ln.Item3, ln.Item4, rw)).ToList()
-        Dim heights = fonts.Select(Function(ft) ft.GetHeight(g) * 0.98F).ToList()
+        Dim heights = fonts.Select(Function(ft) ft.GetHeight(g) * lineSp).ToList()
         Dim y = T + Math.Max(0, (lineY - T - 0.4F - heights.Sum()) / 2)
         For i = 0 To lines.Count - 1
             g.DrawString(lines(i).Item1, fonts(i), Brushes.Black, rx, y, fmt)
@@ -487,9 +557,9 @@ Module RxBridge
                     New Dictionary(Of String, Object) From {{"seq", 2}, {"md", "12/02"}},
                     New Dictionary(Of String, Object) From {{"seq", 3}, {"md", "12/30"}}}}}
             Dim p = PrintLabel(label, 1)
-            Tray.ShowBalloonTip(2000, "RxBridge", $"已送出測試貼紙到「{p}」", ToolTipIcon.Info)
+            Tray.ShowBalloonTip(2000, AppName, $"已送出測試貼紙到「{p}」", ToolTipIcon.Info)
         Catch ex As Exception
-            MessageBox.Show(ex.Message, "RxBridge 測試列印失敗", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            MessageBox.Show(ex.Message, AppName & " 測試列印失敗", MessageBoxButtons.OK, MessageBoxIcon.Error)
         End Try
     End Sub
 

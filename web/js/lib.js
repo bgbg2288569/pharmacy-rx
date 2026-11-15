@@ -370,3 +370,39 @@ export async function bridgeSearch(text) {
     return Array.isArray(rows) ? rows : [];
   } catch { state.bridge = 'err'; return []; }
 }
+/** 處方箋 QR 比對：身分證可含 *（隱碼），生日為 yyyy-MM-dd（月／日可為 **） */
+export async function bridgeMatch(idno, birth) {
+  const u = bridgeUrl();
+  if (!u || state.bridge === 'off' || (!idno && !birth)) return [];
+  try {
+    const r = await fetch(`${u}/match?idno=${encodeURIComponent(idno || '')}&birth=${encodeURIComponent(birth || '')}`, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(r.status);
+    state.bridge = 'ok';
+    const rows = await r.json();
+    return Array.isArray(rows) ? rows : [];
+  } catch { state.bridge = 'err'; return []; }
+}
+
+// ---------------- 紙本處方箋 QR（健保處方 QR，欄位以 ; 分隔）----------------
+// 1 醫事機構代碼、4 姓名（掃描槍常變亂碼）、5 身分證（可能 * 隱碼）、6 民國生日（可能 * 隱碼）、7 科別
+/** 判斷輸入是否像處方箋 QR（給姓名欄等地方自動辨識用） */
+export const looksLikeRxQr = t => /^\s*[0-9A-Z]{10}\s*;/.test(String(t || '')) && String(t).split(';').length >= 8;
+/** 解析處方箋 QR，失敗回傳 null */
+export function parseRxQr(raw) {
+  const t = String(raw || '').replace(/\r?\n/g, '').trim();
+  const c = t.split(';').map(x => x.trim());
+  if (c.length < 8 || !/^[0-9A-Z]{10}$/i.test(c[0])) return null;
+  const idno0 = c[4].toUpperCase().replace(/＊/g, '*');
+  const idno = /^[A-Z*][A-D0-9*][0-9*]{8}$/.test(idno0) && (idno0.match(/\*/g) || []).length <= 6 ? idno0 : '';
+  const b = parseBirthInput(c[5]);
+  let dept = c[6].toUpperCase();
+  if (/^\d$/.test(dept)) dept = '0' + dept;
+  // 姓名：含 ? 或非中英文字元多半是掃描槍編碼錯誤，只拿來參考比對
+  const name = c[3];
+  const nameOk = !!name && !/[?？�]/.test(name);
+  return {
+    hospital_code: c[0].toUpperCase(), name, nameOk, idno, idno_raw: c[4],
+    birth_date: b || '', birth_raw: c[5], dept_code: dept,
+    rx_date: c[7] || '', days: c[9] || '',
+  };
+}
