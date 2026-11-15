@@ -362,7 +362,8 @@ export async function bridgeSearch(text) {
   const u = bridgeUrl();
   if (!u || state.bridge === 'off') return [];
   try {
-    const r = await fetch(`${u}/patients?q=${encodeURIComponent(text)}`, { signal: AbortSignal.timeout(2500) });
+    // 模糊比對（%姓名%）在藥局系統較慢，等久一點；結果晚到也會補進建議清單
+    const r = await fetch(`${u}/patients?q=${encodeURIComponent(text)}`, { signal: AbortSignal.timeout(8000) });
     if (!r.ok) throw new Error(r.status);
     state.bridge = 'ok';
     const rows = await r.json();

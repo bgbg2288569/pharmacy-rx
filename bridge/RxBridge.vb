@@ -138,9 +138,11 @@ Module RxBridge
 
             Select Case req.Url.AbsolutePath.TrimEnd("/"c).ToLowerInvariant()
                 Case "/health"
-                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.1.0"})
+                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.2.0"})
                 Case "/patients"
-                    Dim q = If(req.QueryString("q"), "").Trim()
+                    ' 注意：不能用 req.QueryString —— .NET Framework 會用系統預設編碼（Big5）解碼網址，
+                    ' 中文會變亂碼，送進 ODBC 後變成一串 ?，反而查到一堆含 ? 的姓名。這裡自己用 UTF-8 解碼。
+                    Dim q = QueryParam(req.Url.Query, "q").Trim()
                     If q.Length = 0 Then Reply(res, 200, New List(Of Object)) : Return
                     Reply(res, 200, SearchPatients(q))
                 Case Else
@@ -150,6 +152,19 @@ Module RxBridge
             Try : Reply(res, 500, New With {.error = ex.Message}) : Catch : End Try
         End Try
     End Sub
+
+    ' 用 UTF-8 解析網址參數（?q=%E8%94%A1... → 蔡...）
+    Private Function QueryParam(query As String, name As String) As String
+        If String.IsNullOrEmpty(query) Then Return ""
+        For Each part In query.TrimStart("?"c).Split("&"c)
+            Dim i = part.IndexOf("="c)
+            Dim k = If(i < 0, part, part.Substring(0, i))
+            If Uri.UnescapeDataString(k.Replace("+", " ")) = name Then
+                Return If(i < 0, "", Uri.UnescapeDataString(part.Substring(i + 1).Replace("+", " ")))
+            End If
+        Next
+        Return ""
+    End Function
 
     Private Sub Reply(res As HttpListenerResponse, status As Integer, body As Object)
         Dim bytes = Encoding.UTF8.GetBytes(Json.Serialize(body))
@@ -184,7 +199,7 @@ Module RxBridge
         ElseIf birth <> "" Then
             jobs.Add(New KeyValuePair(Of String, String)("QueryBirth", birth))
         Else
-            jobs.Add(New KeyValuePair(Of String, String)("QueryName", Cfg("NamePattern").Replace("{q}", q)))
+            jobs.Add(New KeyValuePair(Of String, String)("QueryName", Cfg("NamePattern").Replace("{q}", SafeLike(q))))
         End If
         Dim max = Math.Max(1, Math.Min(50, CInt(Val(Cfg("MaxRows")))))
         Dim byId As New Dictionary(Of String, Dictionary(Of String, Object))
@@ -246,6 +261,30 @@ Module RxBridge
             End Using
         End Using
     End Sub
+
+    ' 藥局系統是 Big5（950），Big5 沒有的字（例：㚬、堃的異體字）經 ODBC 送出時會變成 ?，
+    ' 會比對到所有姓名含「?」的客戶。這類字改用 LIKE 的單字萬用字元 _ 代替（任一字都符合）。
+    ' 另外把使用者輸入的 ?、%、_ 也當成萬用字元處理，避免整批亂碼姓名被查出來。
+    Private Function SafeLike(q As String) As String
+        Dim enc As Encoding
+        Try
+            enc = Encoding.GetEncoding(CInt(Val(If(Cfg.ContainsKey("CodePage"), Cfg("CodePage"), "950"))),
+                                       EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback)
+        Catch
+            Return q
+        End Try
+        Dim sb As New StringBuilder()
+        For Each ch In q
+            If ch = "?"c OrElse ch = "%"c OrElse ch = "_"c Then sb.Append("_"c) : Continue For
+            Try
+                enc.GetBytes(New Char() {ch})
+                sb.Append(ch)
+            Catch
+                sb.Append("_"c)
+            End Try
+        Next
+        Return sb.ToString()
+    End Function
 
     ' 民國生日 → 西元 yyyy/MM/dd（與 sa100.birthday 格式相同）；不是合理日期回傳空字串
     '   750312、0750312、1000711（年 2～3 碼＋月日各 2 碼），或 75/3/12、075/03/12、75.3.12

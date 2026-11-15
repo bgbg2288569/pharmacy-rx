@@ -387,6 +387,7 @@ export const OrderForm = {
     const errs = reactive({});
     const sugg = ref([]);
     const suggOpen = ref(false);
+    const extLoading = ref(false);      // 藥局系統查詢中
     const suggIdx = ref(0);
     const openOrders = ref([]);
     const printMode = ref(getPrintMode());
@@ -419,24 +420,31 @@ export const OrderForm = {
     const doSuggest = debounce(async s => {
       const my = ++seqNo;
       if (!s) { sugg.value = []; suggOpen.value = false; return; }
-      const [hist, ext] = await Promise.all([
-        rpc('rx_patient_suggest', { p_store: state.storeId, q: s }).catch(() => []),
-        bridgeSearch(s),
-      ]);
+      // 本系統紀錄先顯示；藥局系統（較慢）查到後再補在下方，兩邊分開顯示
+      const extP = bridgeSearch(s);
+      const hist = await rpc('rx_patient_suggest', { p_store: state.storeId, q: s }).catch(() => []);
       if (my !== seqNo) return;
       const key = (n, b, p) => `${n}|${b || ''}|${p || ''}`;
       const histKeys = new Set(hist.map(h => key(h.patient_name, h.birth_date, h.phone)));
+      const histRows = hist.slice(0, 5).map(h => ({ ...h, src: 'h' }));
+      extLoading.value = state.bridge !== 'off';
+      sugg.value = histRows;
+      suggIdx.value = -1;                     // 沒有用方向鍵選擇時，Enter 維持原本輸入的內容
+      suggOpen.value = sugg.value.length > 0 || extLoading.value;
+      const ext = await extP;
+      if (my !== seqNo) return;
+      extLoading.value = false;
+      const keepIdx = suggIdx.value;
       sugg.value = [
-        // 上半部：本系統寄單紀錄；下半部：藥局系統（調劑系統）客戶資料，分開顯示
-        ...hist.slice(0, 5).map(h => ({ ...h, src: 'h' })),
+        ...histRows,
         ...ext.slice(0, 10).map(p => ({
           src: 'p', patient_name: p.name, phone: onlyDigits(p.phone), phones: (p.phones || []).map(onlyDigits).filter(Boolean),
           birth_date: (p.birthday || '').slice(0, 10), ext_patient_id: p.ext_id || '', id_mask: p.id_mask || '',
           memo: p.memo || '', notify_methods: notifyFromMemo(p.memo), inHist: histKeys.has(key(p.name, (p.birthday || '').slice(0, 10), onlyDigits(p.phone))),
         })),
       ];
-      suggIdx.value = -1;                     // 沒有用方向鍵選擇時，Enter 維持原本輸入的內容
-      suggOpen.value = sugg.value.length > 0;
+      suggIdx.value = keepIdx;
+      if (document.activeElement === nameEl.value) suggOpen.value = sugg.value.length > 0;
     }, 220);
     const onName = () => { openOrders.value = []; extMemo.value = ''; if (!edit.value) doSuggest(f.patient_name.trim()); };
     function pickSugg(s) {
@@ -620,7 +628,7 @@ export const OrderForm = {
     onBeforeUnmount(() => window.removeEventListener('keydown', onHotkey));
 
     return {
-      extMemo, state, root, nameEl, f, family, errs, saving, sugg, suggOpen, suggIdx, openOrders, sameNameOther, edit, printMode, PRINT_MODES,
+      extLoading, extMemo, state, root, nameEl, f, family, errs, saving, sugg, suggOpen, suggIdx, openOrders, sameNameOther, edit, printMode, PRINT_MODES,
       phoneReq, quickDepts, fillOf, onBtnKey, NOTIFY_CLS, onPhone, onName, pickSugg, onNameKey, onNameBlur, hasPhrase, togglePhrase, onHospPick, pickQuick,
       pickDept, onFormKey, save, reset, checkOpen, FILL_STATUS, fmtNo, dayOf, rocOf, shortHosp, birthOf, ageOf, fullOf, emit,
     };
@@ -655,6 +663,7 @@ export const OrderForm = {
               </div>
             </div>
             </template>
+            <div class="sgh p" v-if="extLoading">藥局系統查詢中…</div>
           </div>
         </div>
       </div>
