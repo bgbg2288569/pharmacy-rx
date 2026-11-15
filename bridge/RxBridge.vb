@@ -14,6 +14,7 @@ Imports System.IO
 Imports System.Linq
 Imports System.Net
 Imports System.Text
+Imports System.Text.RegularExpressions
 Imports System.Threading
 Imports System.Web.Script.Serialization
 Imports System.Windows.Forms
@@ -54,8 +55,8 @@ Module RxBridge
         Cfg("ConnectionString") = "DSN=ercrmis;UID=dba;ENP=2bf4d7163b8faf50e6e793f7f296ed57;"
         Cfg("AllowedOrigins") = "*"
         Cfg("MaxRows") = "20"
-        Cfg("Query") = ""
-        Cfg("NamePattern") = "{q}%"
+        Cfg("QueryName") = "" : Cfg("QueryPhone") = "" : Cfg("QueryIdno") = "" : Cfg("QueryBirth") = ""
+        Cfg("NamePattern") = "%{q}%"
         Cfg("PhonePattern") = "{q}%"
         Dim path = IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RxBridge.ini")
         If Not File.Exists(path) Then Return
@@ -89,7 +90,7 @@ Module RxBridge
     End Sub
 
     Private Sub TestQuery()
-        Dim q = Microsoft.VisualBasic.Interaction.InputBox("輸入姓名或電話：", "RxBridge 測試", "王")
+        Dim q = Microsoft.VisualBasic.Interaction.InputBox("輸入姓名、電話、民國生日或身分證字號：", "RxBridge 測試", "王")
         If String.IsNullOrWhiteSpace(q) Then Return
         Try
             Dim rows = SearchPatients(q)
@@ -137,7 +138,7 @@ Module RxBridge
 
             Select Case req.Url.AbsolutePath.TrimEnd("/"c).ToLowerInvariant()
                 Case "/health"
-                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.0.0"})
+                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.1.0"})
                 Case "/patients"
                     Dim q = If(req.QueryString("q"), "").Trim()
                     If q.Length = 0 Then Reply(res, 200, New List(Of Object)) : Return
@@ -160,36 +161,125 @@ Module RxBridge
     End Sub
 
     ' ---------------------------------------------------------------- ODBC 查詢
-    ' Query 中的 ? 依序綁定：每個 ? 都綁同一個值；數字輸入用 PhonePattern，其餘用 NamePattern
-    ' 欄位請用別名：name, phone, ext_id, birthday, last_visit（沒有的欄位可省略）
+    ' 依輸入內容選用不同查詢（RxBridge.ini）：
+    '   身分證／居留證號（A123456789）→ QueryIdno，參數為完整號碼（大寫）
+    '   民國生日（750312、0750312、1000711、75/3/12）→ QueryBirth，參數轉成西元 yyyy/MM/dd
+    '   全數字 → QueryPhone，參數套 PhonePattern（例：0912%）
+    '     6～7 碼且剛好是合理日期時（例：0750312），生日、電話兩種都查，結果合併
+    '   其他 → QueryName，參數套 NamePattern（例：%王%）
+    ' 查詢中每個 ? 都綁同一個值。欄位請用別名：
+    '   ext_id（客戶代號）、name、idno、birthday、tel1、tel2、memo（sa110.allergy）
+    ' 回傳前處理：身分證只回傳遮罩後的 id_mask；電話去掉非數字，手機（09）優先；生日轉成 yyyy-MM-dd；
+    '   同一客戶代號有多筆家庭健康檔時合併成一筆，備註串在一起。
+    Private ReadOnly IdnoRx As New Regex("^[A-Za-z][A-Da-d0-9][0-9]{8}$")
+
     Private Function SearchPatients(q As String) As List(Of Dictionary(Of String, Object))
-        Dim sql = Cfg("Query")
-        If String.IsNullOrWhiteSpace(sql) Then Throw New ApplicationException("RxBridge.ini 尚未設定 Query")
-        Dim isNum = q.All(AddressOf Char.IsDigit)
-        Dim pattern = If(isNum, Cfg("PhonePattern"), Cfg("NamePattern")).Replace("{q}", q)
+        Dim jobs As New List(Of KeyValuePair(Of String, String))
+        Dim birth = RocBirth(q)
+        If IdnoRx.IsMatch(q) Then
+            jobs.Add(New KeyValuePair(Of String, String)("QueryIdno", q.ToUpperInvariant()))
+        ElseIf q.All(AddressOf Char.IsDigit) Then
+            If birth <> "" Then jobs.Add(New KeyValuePair(Of String, String)("QueryBirth", birth))
+            jobs.Add(New KeyValuePair(Of String, String)("QueryPhone", Cfg("PhonePattern").Replace("{q}", q)))
+        ElseIf birth <> "" Then
+            jobs.Add(New KeyValuePair(Of String, String)("QueryBirth", birth))
+        Else
+            jobs.Add(New KeyValuePair(Of String, String)("QueryName", Cfg("NamePattern").Replace("{q}", q)))
+        End If
         Dim max = Math.Max(1, Math.Min(50, CInt(Val(Cfg("MaxRows")))))
+        Dim byId As New Dictionary(Of String, Dictionary(Of String, Object))
         Dim list As New List(Of Dictionary(Of String, Object))
         Using cn As New OdbcConnection(Cfg("ConnectionString"))
             cn.Open()
-            Using cmd As New OdbcCommand(sql, cn)
-                cmd.CommandTimeout = 5
-                For i = 1 To sql.Count(Function(c) c = "?"c)
-                    cmd.Parameters.AddWithValue("p" & i, pattern)
-                Next
-                Using rd = cmd.ExecuteReader()
-                    While rd.Read() AndAlso list.Count < max
-                        Dim row As New Dictionary(Of String, Object)
-                        For c = 0 To rd.FieldCount - 1
-                            Dim v = rd.GetValue(c)
-                            row(rd.GetName(c).ToLowerInvariant()) = If(IsDBNull(v), "",
-                                If(TypeOf v Is Date, CDate(v).ToString("yyyy-MM-dd"), v.ToString().Trim()))
-                        Next
-                        list.Add(row)
-                    End While
-                End Using
-            End Using
+            For Each job In jobs
+                Dim sql = If(Cfg.ContainsKey(job.Key), Cfg(job.Key), "")
+                If String.IsNullOrWhiteSpace(sql) Then Throw New ApplicationException($"RxBridge.ini 尚未設定 {job.Key}")
+                RunQuery(cn, sql, job.Value, byId, list, max)
+            Next
         End Using
         Return list
+    End Function
+
+    Private Sub RunQuery(cn As OdbcConnection, sql As String, param As String,
+                         byId As Dictionary(Of String, Dictionary(Of String, Object)),
+                         list As List(Of Dictionary(Of String, Object)), max As Integer)
+        Using cmd As New OdbcCommand(sql, cn)
+            cmd.CommandTimeout = 5
+            For i = 1 To sql.Count(Function(c) c = "?"c)
+                cmd.Parameters.Add(New OdbcParameter() With {.Value = param})
+            Next
+            Using rd = cmd.ExecuteReader()
+                While rd.Read()
+                    Dim raw As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+                    For c = 0 To rd.FieldCount - 1
+                        Dim v = rd.GetValue(c)
+                        raw(rd.GetName(c)) = If(IsDBNull(v), "",
+                            If(TypeOf v Is Date, CDate(v).ToString("yyyy-MM-dd"), v.ToString().Trim()))
+                    Next
+                    Dim id = Get1(raw, "ext_id")
+                    Dim memo = Get1(raw, "memo")
+                    If id <> "" AndAlso byId.ContainsKey(id) Then
+                        ' 同一位客戶的其他家庭健康檔（或另一種查詢重複查到）：備註合併
+                        Dim old = CStr(byId(id)("memo"))
+                        If memo <> "" AndAlso Not old.Contains(memo) Then byId(id)("memo") = If(old = "", memo, old & "；" & memo)
+                        Continue While
+                    End If
+                    If list.Count >= max Then Continue While
+                    Dim phones As New List(Of String)
+                    For Each t In New String() {Get1(raw, "tel1"), Get1(raw, "tel2")}
+                        Dim d = New String(t.Where(AddressOf Char.IsDigit).ToArray())
+                        If d.Length >= 7 AndAlso Not phones.Contains(d) Then phones.Add(d)
+                    Next
+                    Dim mobile = phones.FirstOrDefault(Function(t) t.StartsWith("09"))
+                    Dim row As New Dictionary(Of String, Object) From {
+                        {"ext_id", id},
+                        {"name", Get1(raw, "name")},
+                        {"birthday", NormDate(Get1(raw, "birthday"))},
+                        {"phone", If(mobile, If(phones.FirstOrDefault(), ""))},
+                        {"phones", phones},
+                        {"id_mask", MaskId(Get1(raw, "idno"))},
+                        {"memo", memo}
+                    }
+                    list.Add(row)
+                    If id <> "" Then byId(id) = row
+                End While
+            End Using
+        End Using
+    End Sub
+
+    ' 民國生日 → 西元 yyyy/MM/dd（與 sa100.birthday 格式相同）；不是合理日期回傳空字串
+    '   750312、0750312、1000711（年 2～3 碼＋月日各 2 碼），或 75/3/12、075/03/12、75.3.12
+    Private Function RocBirth(q As String) As String
+        Dim y As Integer, mo As Integer, d As Integer
+        Dim m = Regex.Match(q.Trim(), "^(\d{2,3})(\d{2})(\d{2})$")
+        If Not m.Success Then m = Regex.Match(q.Trim(), "^(\d{1,3})[/\-.](\d{1,2})[/\-.](\d{1,2})$")
+        If Not m.Success Then Return ""
+        y = CInt(m.Groups(1).Value) + 1911 : mo = CInt(m.Groups(2).Value) : d = CInt(m.Groups(3).Value)
+        If y > Date.Today.Year OrElse mo < 1 OrElse mo > 12 OrElse d < 1 OrElse d > Date.DaysInMonth(y, mo) Then Return ""
+        Return $"{y:0000}/{mo:00}/{d:00}"
+    End Function
+
+    Private Function Get1(d As Dictionary(Of String, String), k As String) As String
+        Dim v As String = Nothing
+        Return If(d.TryGetValue(k, v), If(v, ""), "")
+    End Function
+
+    ' 2001/05/03、2001-5-3、20010503 → 2001-05-03；無法判讀回傳空字串
+    Private Function NormDate(s As String) As String
+        If String.IsNullOrWhiteSpace(s) Then Return ""
+        Dim digits = s.Trim()
+        Dim m = Regex.Match(digits, "^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})")
+        If m.Success Then Return $"{m.Groups(1).Value}-{CInt(m.Groups(2).Value):00}-{CInt(m.Groups(3).Value):00}"
+        m = Regex.Match(digits, "^(\d{4})(\d{2})(\d{2})$")
+        If m.Success Then Return $"{m.Groups(1).Value}-{m.Groups(2).Value}-{m.Groups(3).Value}"
+        Return ""
+    End Function
+
+    ' A123456789 → A123***789（隱去中間 3 碼，用來分辨同名）
+    Private Function MaskId(s As String) As String
+        If String.IsNullOrWhiteSpace(s) OrElse s.Length < 7 Then Return ""
+        Dim start = (s.Length - 3) \ 2
+        Return s.Substring(0, start) & "***" & s.Substring(start + 3)
     End Function
 
 End Module

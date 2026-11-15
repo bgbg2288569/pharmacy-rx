@@ -633,9 +633,19 @@ end $$;
 -- 姓名 / 電話自動完成：同一病人取最近一筆
 create or replace function rx_patient_suggest(p_store text, q text) returns setof jsonb
 language plpgsql stable security definer set search_path = public as $$
+declare
+  m text[];
+  v_birth text;       -- 輸入民國生日（750312、0750312、75/3/12）時轉成 yyyy-mm-dd
 begin
   if p_store is null or not rx_can_store(p_store) then raise exception '沒有此門市的權限'; end if;
   if coalesce(trim(q), '') = '' then return; end if;
+  m := coalesce(regexp_match(trim(q), '^(\d{2,3})(\d{2})(\d{2})$'), regexp_match(trim(q), '^(\d{1,3})[/.-](\d{1,2})[/.-](\d{1,2})$'));
+  if m is not null then
+    begin
+      v_birth := to_char(make_date(m[1]::int + 1911, m[2]::int, m[3]::int), 'YYYY-MM-DD');
+    exception when others then v_birth := null;
+    end;
+  end if;
   return query
   select to_jsonb(t) from (
     select distinct on (o.patient_name, o.birth_date, coalesce(o.phone, ''))
@@ -648,7 +658,7 @@ begin
                and f.status in ('pending','prepared')) as open_fills
     from rx_orders o
     where o.store_id = p_store
-      and (o.patient_name ilike trim(q) || '%' or o.patient_name ilike '%' || trim(q) || '%' or o.phone like trim(q) || '%')
+      and (o.patient_name ilike '%' || trim(q) || '%' or o.phone like trim(q) || '%' or (v_birth is not null and o.birth_date = v_birth))
     order by o.patient_name, o.birth_date, coalesce(o.phone, ''), o.created_at desc
   ) t
   order by (t.patient_name ilike trim(q) || '%') desc, t.created_at desc

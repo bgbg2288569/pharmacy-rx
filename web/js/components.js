@@ -4,7 +4,7 @@ import {
   sb, state, q, rpc, toast, toastErr, NOTIFY, NOTIFY_CLS, FILL_STATUS, ORDER_STATUS, ACTION_LABEL, CIRCLED,
   parseRocInput, rocOf, fullOf, weekOf, addDays, todayISO, diffDays, dtOf, dayOf, fmtNo, onlyDigits, debounce,
   findStaff, askStaff, bridgeSearch, bump, storeSetting, isoOf, parseISO, fillTpl, copyText, shortHosp, ageOf, birthOf, selfOnly,
-  parseBirthInput, birthMatch, isMasked, focusNext, askConfirm, DEFAULT_CANCEL_REASONS, loadStoreData, useDirty,
+  parseBirthInput, birthMatch, isMasked, focusNext, askConfirm, DEFAULT_CANCEL_REASONS, loadStoreData, useDirty, notifyFromMemo,
 } from './lib.js';
 import { printOrder, getPrintMode, setPrintMode, PRINT_MODES } from './print.js';
 
@@ -395,8 +395,11 @@ export const OrderForm = {
     const fillOf = seq => props.order?.fills?.find(x => x.seq === seq);
     const quickDepts = computed(() => (storeSetting('quick_depts', []) || []).map(c => state.depts.find(d => d.code === c)).filter(Boolean));
 
+    // 藥局系統（調劑系統）帶入的客戶備註（sa110.allergy），只顯示參考，不存進寄單
+    const extMemo = ref('');
     function load(o) {
       Object.assign(f, emptyForm());
+      extMemo.value = '';
       if (!o) return;
       Object.assign(f, {
         patient_name: o.patient_name, birth_date: o.birth_date || '', phone: o.phone || '', notify_methods: [...(o.notify_methods || [])],
@@ -424,14 +427,18 @@ export const OrderForm = {
       const key = (n, b, p) => `${n}|${b || ''}|${p || ''}`;
       const histKeys = new Set(hist.map(h => key(h.patient_name, h.birth_date, h.phone)));
       sugg.value = [
-        ...hist.map(h => ({ ...h, src: 'h' })),
-        ...ext.map(p => ({ src: 'p', patient_name: p.name, phone: onlyDigits(p.phone), birth_date: (p.birthday || '').slice(0, 10), ext_patient_id: p.ext_id || '', last_visit: p.last_visit || '' }))
-          .filter(p => !histKeys.has(key(p.patient_name, p.birth_date, p.phone))),
-      ].slice(0, 15);
+        // 上半部：本系統寄單紀錄；下半部：藥局系統（調劑系統）客戶資料，分開顯示
+        ...hist.slice(0, 5).map(h => ({ ...h, src: 'h' })),
+        ...ext.slice(0, 10).map(p => ({
+          src: 'p', patient_name: p.name, phone: onlyDigits(p.phone), phones: (p.phones || []).map(onlyDigits).filter(Boolean),
+          birth_date: (p.birthday || '').slice(0, 10), ext_patient_id: p.ext_id || '', id_mask: p.id_mask || '',
+          memo: p.memo || '', notify_methods: notifyFromMemo(p.memo), inHist: histKeys.has(key(p.name, (p.birthday || '').slice(0, 10), onlyDigits(p.phone))),
+        })),
+      ];
       suggIdx.value = -1;                     // 沒有用方向鍵選擇時，Enter 維持原本輸入的內容
       suggOpen.value = sugg.value.length > 0;
     }, 220);
-    const onName = () => { openOrders.value = []; if (!edit.value) doSuggest(f.patient_name.trim()); };
+    const onName = () => { openOrders.value = []; extMemo.value = ''; if (!edit.value) doSuggest(f.patient_name.trim()); };
     function pickSugg(s) {
       if (!s) return;
       f.patient_name = s.patient_name;
@@ -442,6 +449,11 @@ export const OrderForm = {
         f.notify_methods = [...(s.notify_methods || [])];
         f.hospital_code = s.hospital_code || ''; f.hospital_name = s.hospital_name || '';
         f.dept_code = s.dept_code || ''; f.dept_name = s.dept_name || '';
+        extMemo.value = '';
+      } else {
+        // 藥局系統：備註含 LINE／簡訊／電話 → 預選通知方式；備註整串顯示在通知方式下方
+        if (s.notify_methods.length) f.notify_methods = [...s.notify_methods];
+        extMemo.value = s.memo || '';
       }
       suggOpen.value = false;
       checkOpen();
@@ -608,7 +620,7 @@ export const OrderForm = {
     onBeforeUnmount(() => window.removeEventListener('keydown', onHotkey));
 
     return {
-      state, root, nameEl, f, family, errs, saving, sugg, suggOpen, suggIdx, openOrders, sameNameOther, edit, printMode, PRINT_MODES,
+      extMemo, state, root, nameEl, f, family, errs, saving, sugg, suggOpen, suggIdx, openOrders, sameNameOther, edit, printMode, PRINT_MODES,
       phoneReq, quickDepts, fillOf, onBtnKey, NOTIFY_CLS, onPhone, onName, pickSugg, onNameKey, onNameBlur, hasPhrase, togglePhrase, onHospPick, pickQuick,
       pickDept, onFormKey, save, reset, checkOpen, FILL_STATUS, fmtNo, dayOf, rocOf, shortHosp, birthOf, ageOf, fullOf, emit,
     };
@@ -616,25 +628,33 @@ export const OrderForm = {
   template: `<div ref="root" @keydown="onFormKey" class="oform">
     <div class="form">
       <div class="fld c4">
-        <label>姓名 <span class="req">*</span><span class="opt">姓名／電話</span></label>
+        <label>姓名 <span class="req">*</span><span class="opt">姓名／電話／民國生日</span></label>
         <div style="position:relative">
           <input ref="nameEl" class="inp big" :class="{err:errs.name}" data-nav v-model="f.patient_name" autocomplete="off"
             @input="onName" @keydown="onNameKey" @blur="onNameBlur"
             @focus="sugg.length && (suggOpen = true)">
           <div class="dd sugg" v-if="suggOpen">
-            <div v-for="(s,i) in sugg" :key="i" class="it" :class="{on:i===suggIdx}" @mousedown.prevent="pickSugg(s)">
+            <template v-for="(s,i) in sugg" :key="i">
+            <div class="sgh" :class="s.src" v-if="i===0 || sugg[i-1].src!==s.src">
+              {{ s.src==='h' ? '寄單紀錄（本系統）' : '藥局系統客戶資料（調劑系統）' }}</div>
+            <div class="it" :class="[{on:i===suggIdx}, 'from-'+s.src]" @mousedown.prevent="pickSugg(s)">
               <span class="src" :class="s.src">{{ s.src==='h' ? '紀錄' : '藥局' }}</span>
               <div class="grow">
                 <div class="l1"><b>{{s.patient_name}}</b>
                   <span v-if="s.birth_date" class="num">{{fullOf(s.birth_date)}}</span>
-                  <span class="num muted">{{s.phone}}</span>
-                  <span v-for="m in s.notify_methods||[]" :key="m" class="pill" :class="NOTIFY_CLS[m]">{{m}}</span></div>
+                  <span class="num muted">{{ s.src==='p' && s.phones?.length ? s.phones.join(' / ') : s.phone }}</span>
+                  <span v-for="m in s.notify_methods||[]" :key="m" class="pill" :class="NOTIFY_CLS[m]">{{m}}</span>
+                  <span v-if="s.inHist" class="small muted">（已有寄單紀錄）</span></div>
                 <div class="d" v-if="s.src==='h'">
                   <b v-if="s.open_fills" class="warn">未完成 {{s.open_fills}}</b>
                   {{shortHosp(s.hospital_code, s.hospital_name) || '—'}}｜{{s.dept_name || '—'}}｜上次 {{dayOf(s.created_at)}}</div>
-                <div class="d" v-else>{{s.ext_patient_id ? '病歷 ' + s.ext_patient_id : ''}} {{s.last_visit ? '｜最近就診 ' + s.last_visit : ''}}</div>
+                <div class="d" v-else>
+                  <span v-if="s.ext_patient_id">客戶代號 {{s.ext_patient_id}}</span>
+                  <span v-if="s.id_mask">｜{{s.id_mask}}</span>
+                  <div class="memo" v-if="s.memo">備註：{{s.memo}}</div></div>
               </div>
             </div>
+            </template>
           </div>
         </div>
       </div>
@@ -672,6 +692,7 @@ export const OrderForm = {
       <div class="fld c12" data-k="notify">
         <label>通知方式 <span class="req">*</span><span class="opt">可複選</span></label>
         <NotifyPicker v-model="f.notify_methods" />
+        <div class="extmemo" v-if="extMemo"><span class="src p">藥局</span>客戶備註：{{extMemo}}</div>
         <div class="hint err" v-if="errs.notify">{{errs.notify}}</div>
       </div>
 
