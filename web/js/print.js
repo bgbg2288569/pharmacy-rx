@@ -1,4 +1,4 @@
-// 列印：標籤貼紙 4×3cm、發票機 80/58mm、A4 清單。透過隱藏 iframe 列印，不影響主畫面。
+// 列印：標籤貼紙 4×3cm、發票機 57mm（藥局聯＋客戶聯）、A5、A4 清單。透過隱藏 iframe 列印，不影響主畫面。
 import qrcode from 'qrcode-generator';
 import { curStore, storeSetting, rocOf, mdOf, fullOf, fmtNo, maskPhone, dtOf, CIRCLED, ls, rpc, shortHosp, bridgeUrl, state, toast } from './lib.js';
 
@@ -74,26 +74,45 @@ function labelHtml(o, fills) {
   </div>`;
 }
 
-function receiptHtml(o, fills, w) {
-  const rows = fillsActive(fills).map(f => `<tr><td>第${f.seq}次</td><td class="r">${rocOf(f.due_date, true)}</td></tr>`).join('');
-  return `<div class="rc" style="width:${w}mm">
-    <div class="st">${esc(curStore()?.name || '')}</div>
-    <div class="tt">慢性處方箋寄單</div>
-    <div class="qr">${qrSvg(o.order_no)}</div>
-    <div class="no">${esc(fmtNo(o.order_no))}</div>
-    <table>
-      <tr><td>姓名</td><td class="r b">${esc(o.patient_name)}</td></tr>
-      ${o.birth_date ? `<tr><td>生日</td><td class="r">${fullOf(o.birth_date)}</td></tr>` : ''}
-      ${o.phone ? `<tr><td>電話</td><td class="r">${esc(maskPhone(o.phone))}</td></tr>` : ''}
-      <tr><td>通知</td><td class="r">${esc((o.notify_methods || []).join('、'))}</td></tr>
-      ${o.hospital_name ? `<tr><td>醫院</td><td class="r">${esc(shortHosp(o.hospital_code, o.hospital_name))}</td></tr>` : ''}
-      ${o.dept_name ? `<tr><td>科別</td><td class="r">${esc(o.dept_name)}</td></tr>` : ''}
+// 57mm 熱感發票紙：上半「藥局聯」（留店內，含完整電話、通知方式、備註），撕線下「客戶聯」（給客人，含醫院科別與領藥日）
+// 熱感機 203dpi、只能印純黑：Logo 用單色兩個圓（實心＋圓環），不用漸層、灰階與細線
+const LOGO_MONO = `<svg viewBox="0 0 40 40" class="lg" aria-hidden="true"><circle cx="14.5" cy="24" r="10" fill="#000"/><circle cx="25.5" cy="15.5" r="8.6" fill="none" stroke="#fff" stroke-width="8"/><circle cx="25.5" cy="15.5" r="8.6" fill="none" stroke="#000" stroke-width="4.2"/></svg>`;
+function receiptHtml(o, fills) {
+  const fs = fillsActive(fills);
+  const store = esc(curStore()?.name || '');
+  const no = esc(fmtNo(o.order_no));
+  const hosp = esc(shortHosp(o.hospital_code, o.hospital_name) || o.hospital_name || '');
+  const dates = fs.map(f => `<div class="d"><b>${SEQ_MARK[f.seq] || f.seq}</b><span class="md">${rocOf(f.due_date, true)}</span></div>`).join('')
+    || '<div class="d none">（未排定）</div>';
+  const notify = (o.notify_methods || []);
+  const footer = esc(storeSetting('receipt_footer', ''));
+  const head = (copy) => `<div class="top">${LOGO_MONO}<div class="sn"><div class="s1">${store}</div><div class="s2">慢性處方箋寄單</div></div><div class="cp">${copy}</div></div>`;
+  return `<div class="rc">
+    ${head('藥局聯')}
+    <div class="idrow"><div class="qr">${qrSvg(o.order_no)}</div>
+      <div class="idt"><div class="lbl">寄單編號</div><div class="no">${no}</div></div></div>
+    <div class="nm">${esc(o.patient_name)}</div>
+    ${o.phone ? `<div class="ph">${esc(o.phone)}</div>` : ''}
+    <div class="sec">通知方式</div>
+    <div class="nt">${notify.length ? notify.map(m => `<span>${esc(m)}</span>`).join('') : '<em>未指定</em>'}</div>
+    <div class="sec">領藥日</div>
+    <div class="ds">${dates}</div>
+    ${hosp || o.dept_name ? `<div class="hp">${hosp}${o.dept_name ? '｜' + esc(o.dept_name) : ''}</div>` : ''}
+    ${o.note ? `<div class="sec">備註</div><div class="memo">${esc(o.note)}</div>` : ''}
+    <div class="meta">${dtOf(o.created_at || new Date())}${o.created_staff_name ? '　' + esc(o.created_staff_name) : ''}</div>
+    <div class="cut">✂ ─ ─ ─ 請沿此線撕開 ─ ─ ─</div>
+    ${head('客戶聯')}
+    <div class="nm">${esc(o.patient_name)}<small>${o.birth_date ? fullOf(o.birth_date) : ''}</small></div>
+    <table class="kv">
+      ${hosp ? `<tr><th>醫院</th><td>${hosp}</td></tr>` : ''}
+      ${o.dept_name ? `<tr><th>科別</th><td>${esc(o.dept_name)}</td></tr>` : ''}
+      ${o.phone ? `<tr><th>電話</th><td class="num">${esc(maskPhone(o.phone))}</td></tr>` : ''}
+      <tr><th>編號</th><td class="num">${no}</td></tr>
     </table>
-    <div class="hd">領藥日期</div>
-    <table class="fl">${rows}</table>
-    ${o.note ? `<div class="nt">備註：${esc(o.note)}</div>` : ''}
-    <div class="ft">寄單時間 ${dtOf(o.created_at || new Date())}${o.created_staff_name ? ' · ' + esc(o.created_staff_name) : ''}</div>
-    <div class="ft">${esc(storeSetting('receipt_footer', ''))}</div>
+    <div class="sec">領藥日</div>
+    <div class="ds">${dates}</div>
+    <div class="tip">藥品預作完成後依您選擇的方式通知，領藥請攜帶健保卡與本單。</div>
+    ${footer ? `<div class="ft">${footer}</div>` : ''}
   </div>`;
 }
 
@@ -133,18 +152,40 @@ const CSS = {
     .fl span{display:flex;align-items:center}
     .fl b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;
       font-size:1.08em;line-height:1;position:relative;top:.07em;margin-right:.18em;letter-spacing:0}`,
-  receipt: `@page{margin:0}
-    html,body{margin:0;padding:0;font-family:${FONT};color:#000}
-    .rc{padding:3mm 2mm 6mm;box-sizing:border-box;font-size:10pt;page-break-after:always}
-    .st{text-align:center;font-size:12pt;font-weight:900}
-    .tt{text-align:center;font-size:10pt;margin-bottom:2mm}
-    .qr{width:26mm;height:26mm;margin:0 auto}.qr svg{width:100%;height:100%;display:block}
-    .no{text-align:center;font-size:12pt;font-weight:900;font-family:Arial,sans-serif;letter-spacing:.5px;margin:1mm 0 2mm}
-    table{width:100%;border-collapse:collapse}td{padding:.4mm 0;vertical-align:top}td:first-child{white-space:nowrap;width:10mm;padding-right:2mm}.r{text-align:right}.b{font-weight:900;font-size:12pt}
-    .hd{border-top:.3mm dashed #000;margin-top:2mm;padding-top:1.5mm;font-weight:900}
-    .fl td{font-size:11pt;font-weight:700}
-    .nt{margin-top:2mm;font-size:9pt}
-    .ft{margin-top:2mm;font-size:8pt;text-align:center}`,
+  // 57mm 紙、可列印寬度約 48mm；字以粗黑為主，不用灰色（熱感機灰色會變淡或消失）
+  receipt: `@page{size:57mm auto;margin:0}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
+    html,body{margin:0;padding:0;font-family:${FONT};color:#000;background:#fff}
+    .rc{width:48mm;margin:0 auto;padding:2mm 0 8mm;font-size:10.5pt;line-height:1.3;page-break-after:always}
+    .num,.no,.ph,.md{font-family:Arial,"Helvetica Neue",sans-serif}
+    .top{display:flex;align-items:center;gap:1.6mm;padding-bottom:1.4mm;border-bottom:.6mm solid #000}
+    .lg{width:8mm;height:8mm;flex:none}
+    .sn{flex:1;min-width:0;line-height:1.15}.s1{font-size:12pt;font-weight:900;white-space:nowrap;overflow:hidden}.s2{font-size:8pt;font-weight:700;white-space:nowrap}
+    .cp{flex:none;background:#000;color:#fff;font-weight:900;font-size:10pt;padding:.8mm 1.6mm;border-radius:1mm}
+    .idrow{display:flex;align-items:center;gap:2mm;margin-top:2mm}
+    .qr{width:16mm;height:16mm;flex:none}.qr svg{width:100%;height:100%;display:block}
+    .idt{min-width:0}.lbl{font-size:8.5pt;font-weight:700}.no{font-size:12pt;font-weight:900;white-space:nowrap}
+    .nm{font-size:20pt;font-weight:900;line-height:1.15;margin-top:2mm;word-break:break-all}
+    .nm small{display:block;font-size:10pt;font-weight:700;font-family:Arial,sans-serif;margin-top:.3mm}
+    .ph{font-size:15pt;font-weight:900;letter-spacing:.3mm}
+    .sec{margin-top:2.2mm;font-size:8.5pt;font-weight:900;letter-spacing:.6mm;display:flex;align-items:center;gap:1.2mm}
+    .sec::after{content:"";flex:1;border-top:.35mm solid #000}
+    .nt{display:flex;flex-wrap:wrap;gap:1.2mm;margin-top:.8mm}
+    .nt span{border:.5mm solid #000;border-radius:1mm;padding:.2mm 1.6mm;font-size:13pt;font-weight:900}
+    .nt em{font-style:normal;font-weight:700}
+    .ds{margin-top:.6mm}
+    .d{display:flex;align-items:center;gap:1.6mm;font-size:15pt;font-weight:900;line-height:1.35}
+    .d b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;font-size:16pt;line-height:1}
+    .d.none{font-size:11pt}
+    .hp{margin-top:1.4mm;font-size:10.5pt;font-weight:700}
+    .memo{margin-top:.6mm;font-size:11pt;font-weight:700;word-break:break-all}
+    .meta{margin-top:2mm;font-size:8.5pt;font-weight:700}
+    .cut{margin:4mm 0 3mm;text-align:center;font-size:8.5pt;font-weight:700;white-space:nowrap;overflow:hidden}
+    .kv{width:100%;border-collapse:collapse;margin-top:1.4mm}
+    .kv th{width:9mm;text-align:left;font-size:9pt;font-weight:900;vertical-align:top;padding:.5mm 0;white-space:nowrap}
+    .kv td{font-size:11.5pt;font-weight:700;padding:.5mm 0;word-break:break-all}
+    .tip{margin-top:2.4mm;font-size:9pt;font-weight:700;border:.4mm solid #000;border-radius:1mm;padding:1mm 1.4mm;line-height:1.35}
+    .ft{margin-top:2mm;text-align:center;font-size:9pt;font-weight:700}`,
   a5: `@page{size:A5;margin:10mm}
     html,body{margin:0;font-family:${FONT};color:#000;font-size:12pt}
     .a5{page-break-after:always}
@@ -191,7 +232,7 @@ async function printLabelViaBridge(o, fills, copies) {
 export async function printOrder(o, fills, mode = getPrintMode(), copies = 1) {
   if (o.id) rpc('rx_log_print', { p_id: o.id, p_mode: mode }).catch(() => {});
   if (mode === 'label' && state.bridge !== 'off' && await printLabelViaBridge(o, fills, copies)) return;
-  const one = mode === 'label' ? labelHtml(o, fills) : mode === 'a5' ? a5Html(o, fills) : receiptHtml(o, fills, 50);
+  const one = mode === 'label' ? labelHtml(o, fills) : mode === 'a5' ? a5Html(o, fills) : receiptHtml(o, fills);
   const css = mode === 'label' ? CSS.label : mode === 'a5' ? CSS.a5 : CSS.receipt;
   const body = Array.from({ length: Math.max(1, copies) }, () => one).join('');
   printHtml(`<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${body}</body></html>`);

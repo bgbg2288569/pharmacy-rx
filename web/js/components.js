@@ -54,7 +54,7 @@ export const RocCalendar = {
 // ---------------------------------------------------------------- 民國日期（畫面顯示 MM/DD）
 export const RocDate = {
   props: {
-    modelValue: String, prev: String, disabled: Boolean, birth: Boolean, compact: Boolean,
+    modelValue: String, base: String, seq: { type: Number, default: 0 }, disabled: Boolean, birth: Boolean, compact: Boolean,
     placeholder: { type: String, default: '例 1120 或 1151120' },
   },
   emits: ['update:modelValue'],
@@ -94,7 +94,10 @@ export const RocDate = {
       calOpen.value = !calOpen.value;
     }
     function fromCal(v) { calOpen.value = false; emit('update:modelValue', v); input.value?.focus(); }
-    const plus = n => emit('update:modelValue', addDays(props.prev, n));
+    // 第二、三次領藥日：與診所（處方 QR）相同算法 = 第一次 + 天數 ×（第幾次 − 1）− 9
+    // 例：28 天、第一次 10/27 → 第二次 11/15、第三次 12/13
+    const LEAD = 9;
+    const plus = n => { if (props.base) emit('update:modelValue', addDays(props.base, n * (props.seq - 1) - LEAD)); };
     // 日期只能輸入數字和 /；生日另可輸入 *（醫院隱碼）
     function onInput(e) {
       const v = e.target.value.replace(props.birth ? /[^\d\/*]/g : /[^\d\/]/g, '');
@@ -123,9 +126,9 @@ export const RocDate = {
       <button type="button" class="cal" tabindex="-1" title="民國年日曆" :disabled="disabled" @click="openPicker">📅</button>
     </div>
     <RocCalendar v-if="calOpen" :model-value="modelValue" :birth="birth" :up="calUp" @pick="fromCal" @close="calOpen=false" />
-    <div class="plus" v-if="prev && !disabled && !compact"><span class="tiny muted">{{ modelValue ? rel : '依前次' }}</span>
-      <button type="button" tabindex="-1" @click="plus(28)">+28</button>
-      <button type="button" tabindex="-1" @click="plus(30)">+30</button>
+    <div class="plus" v-if="seq > 1 && !disabled && !compact"><span class="tiny muted">{{ modelValue ? rel : (base ? '依第一次・處方天數' : '先填第一次') }}</span>
+      <button type="button" tabindex="-1" v-for="n in [28, 29, 30]" :key="n" :disabled="!base"
+        :title="base ? '第一次 + ' + n + ' 天 × ' + (seq - 1) + ' − 9 天' : '請先填第一次領藥日'" @click="plus(n)">{{n}}天</button>
     </div>
     <div class="tiny muted" v-else-if="rel">{{rel}}</div>
   </div>`,
@@ -860,7 +863,7 @@ export const OrderForm = {
       <div class="fld c4" v-for="i in 3" :key="i" :data-k="'d'+i">
         <label :class="'lq'+i">第{{['一','二','三'][i-1]}}次領藥
           <span class="pill" v-if="edit && fillOf(i)" :class="fillOf(i).status">{{FILL_STATUS[fillOf(i).status]}}</span></label>
-        <RocDate v-model="f.dates[i-1]" placeholder="" :prev="i>1 ? f.dates[i-2] : ''" :disabled="edit && ['notified','picked'].includes(fillOf(i)?.status)" />
+        <RocDate v-model="f.dates[i-1]" placeholder="" :base="f.dates[0]" :seq="i" :disabled="edit && ['notified','picked'].includes(fillOf(i)?.status)" />
       </div>
       <div class="fld c12" v-if="errs.dates"><div class="hint err">{{errs.dates}}</div></div>
 
@@ -1069,14 +1072,14 @@ export const OrderDetail = {
 
         <div class="famblock">
           <div class="btns" style="margin-bottom:6px"><b>👪 同行家人／同一人多科別</b><span style="flex:1"></span>
-            <button class="btn xs" v-if="o.status!=='cancelled' && !linking" @click="startLink">＋連結家人或同一人其他寄單</button>
+            <button class="btn xs" v-if="o.status!=='cancelled' && !linking" @click="startLink">＋連結其他寄單</button>
             <button class="btn xs danger" v-if="o.family_no" @click="unlink">解除本筆同行</button></div>
           <div class="fam" v-for="x in fam" :key="x.id" @click="open(x.id)">
             <b>{{x.patient_name}}</b><span class="pill regular" v-if="x.patient_name===o.patient_name">同一人</span>
             <span class="small">{{shortHosp(x.hospital_code, x.hospital_name) || '—'}}｜{{x.dept_name || '—'}}</span>
             <span style="display:flex;gap:4px"><FillChip v-for="f in sortedFills(x)" :key="f.id" :f="f" show-status /></span>
           </div>
-          <div class="small muted" v-if="!fam.length && !linking">尚未連結。家人分開寄單、或同一人在不同科別的寄單，可在這裡事後連結，預作完成後一起通知。</div>
+          <div class="small muted" v-if="!fam.length && !linking">尚未連結，家人或同一人同時寄單，可進行同行家人連結，預作完成後一起通知。</div>
           <div v-if="linking" class="linkbox">
             <div class="inline"><input class="inp" v-model="linkQ" @input="findLinkD" placeholder="搜尋姓名／電話／寄單編號（預設列出同一人其他寄單與同電話）">
               <button class="x" @click="linking=false">取消</button></div>

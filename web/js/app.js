@@ -159,6 +159,17 @@ const App = {
     });
     onBeforeUnmount(() => { clearInterval(timer); clearInterval(idleTimer); window.removeEventListener('keydown', onKey); });
     watch(() => state.tick, () => refreshCounts());
+    // 參照資料（常用醫院、科別、片語、人員、系統設定）在其他頁面或後台改過後，切換頁面、回到這個分頁時自動重新載入
+    let refAt = Date.now(), refBusy = false;
+    async function refreshRef(force = false) {
+      if (!state.user || !state.storeId || refBusy) return;
+      if (!force && Date.now() - refAt < 15000) return;      // 15 秒內不重複載入
+      refBusy = true;
+      try { await loadCommon(); await loadStoreData(); refAt = Date.now(); } catch { /* 下次再試 */ } finally { refBusy = false; }
+    }
+    watch(() => state.route, () => refreshRef(true));
+    window.addEventListener('focus', () => refreshRef());
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshRef(); });
 
     return { state, routes, page, isAdmin, changeStore, logout, storeName, BRAND_SVG, CONFIG, zoomMode, ZOOMS };
   },
