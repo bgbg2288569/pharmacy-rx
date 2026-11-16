@@ -622,3 +622,12 @@ label.ck{display:inline-flex;gap:6px;align-items:center;font-weight:700;cursor:p
 /* 掃描紙本處方箋 QR（刷在姓名欄）：建議清單最上方顯示處方內容 */
 .dd.sugg .qrinfo{font-size:12.5px;color:var(--ink);background:#fff7ec;border-radius:10px;padding:6px 10px;margin-bottom:4px;white-space:normal}
 .plus button:disabled{opacity:.4;cursor:not-allowed}
+
+/* 進行中提示（切換門市、查詢）：畫面上方中央 */
+.busytip{position:fixed;top:74px;left:50%;transform:translateX(-50%);z-index:9000;display:flex;align-items:center;gap:8px;
+  background:#1f2a37;color:#fff;font-weight:700;font-size:14px;padding:8px 16px;border-radius:99px;box-shadow:0 6px 20px rgba(0,0,0,.18);pointer-events:none}
+.busytip .spin{width:14px;height:14px;border-radius:50%;border:2.5px solid rgba(255,255,255,.35);border-top-color:#fff;animation:busyspin .7s linear infinite}
+@keyframes busyspin{to{transform:rotate(360deg)}}
+.busy-enter-active,.busy-leave-active{transition:opacity .15s}
+.busy-enter-from,.busy-leave-to{opacity:0}
+@media print{.busytip{display:none}}

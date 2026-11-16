@@ -1,6 +1,6 @@
 // 寄單輸入
 import { ref, computed, watch, onMounted } from 'vue';
-import { sb, state, q, toastErr, todayISO, addDays, rocOf, dtOf, timeOf, fmtNo, storeSetting, shortHosp } from '../lib.js';
+import { sb, state, q, toastErr, todayISO, addDays, rocOf, dtOf, timeOf, fmtNo, storeSetting, shortHosp, withBusy } from '../lib.js';
 import { OrderForm, FillChip } from '../components.js';
 import { printOrder } from '../print.js';
 
@@ -14,8 +14,8 @@ export default {
       if (!state.storeId) return;
       const t = new Date(); t.setHours(0, 0, 0, 0);
       try {
-        today.value = await q(sb.from('rx_orders').select('*, fills:rx_fills(*)').eq('store_id', state.storeId)
-          .gte('created_at', t.toISOString()).order('created_at', { ascending: false }).limit(200));
+        today.value = await withBusy(q(sb.from('rx_orders').select('*, fills:rx_fills(*)').eq('store_id', state.storeId)
+          .gte('created_at', t.toISOString()).order('created_at', { ascending: false }).limit(200)), '載入中…');
       } catch (e) { toastErr(e); }
     }
     watch(() => [state.storeId, state.tick], loadToday);

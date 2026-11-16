@@ -1,7 +1,7 @@
 // 處方寄單系統 — 主程式（登入、導覽、路由）
 import { createApp, ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { CONFIG } from './config.js';
-import { sb, state, q, isAdmin, loadCommon, loadStoreData, refreshCounts, toastErr, ls, cleanErr, confirmLeave, hasUnsaved, installScanGuard } from './lib.js';
+import { sb, state, q, isAdmin, loadCommon, loadStoreData, refreshCounts, toastErr, ls, cleanErr, confirmLeave, hasUnsaved, installScanGuard, withBusy } from './lib.js';
 import { StaffPrompt, OrderDetail, ConfirmModal } from './components.js';
 import EntryPage from './pages/entry.js';
 import SearchPage from './pages/search.js';
@@ -107,7 +107,7 @@ const App = {
       if (!confirmLeave('切換門市')) { e.target.value = state.storeId; return; }
       state.storeId = e.target.value; ls.set('admin_store', state.storeId);
       state.detailId = null; state.draft = null; state.lastSaved = null;
-      await loadStoreData(); refreshCounts();
+      await withBusy(loadStoreData(), '切換門市中…'); refreshCounts();
     }
     async function logout() { if (!confirmLeave('登出')) return; await sb.auth.signOut(); }
     const storeName = computed(() => state.stores.find(s => s.id === state.storeId)?.name || '');
@@ -167,6 +167,12 @@ const App = {
     });
     onBeforeUnmount(() => { clearInterval(timer); clearInterval(idleTimer); window.removeEventListener('keydown', onKey); });
     watch(() => state.tick, () => refreshCounts());
+    // 進行中提示：超過 0.25 秒才顯示，避免快速查詢時閃一下
+    const busyShow = ref(false); let busyT;
+    watch(() => state.busy.length, n => {
+      clearTimeout(busyT);
+      if (n) busyT = setTimeout(() => { busyShow.value = state.busy.length > 0; }, 250); else busyShow.value = false;
+    });
     // 參照資料（常用醫院、科別、片語、人員、系統設定）在其他頁面或後台改過後，切換頁面、回到這個分頁時自動重新載入
     let refAt = Date.now(), refBusy = false;
     async function refreshRef(force = false) {
@@ -179,7 +185,7 @@ const App = {
     window.addEventListener('focus', () => refreshRef());
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshRef(); });
 
-    return { state, routes, page, isAdmin, changeStore, logout, storeName, BRAND_SVG, CONFIG, zoomMode, ZOOMS };
+    return { state, routes, page, isAdmin, changeStore, logout, storeName, BRAND_SVG, CONFIG, zoomMode, ZOOMS, busyShow };
   },
   template: `
     <template v-if="!state.ready"><div class="login"><div class="card"><p class="muted">載入中…</p></div></div></template>
@@ -208,6 +214,7 @@ const App = {
     <StaffPrompt />
     <ConfirmModal />
     <div class="toasts"><div v-for="t in state.toasts" :key="t.id" class="toast" :class="t.type">{{t.msg}}</div></div>
+    <transition name="busy"><div class="busytip" v-if="busyShow" role="status"><span class="spin"></span>{{ state.busy[state.busy.length - 1]?.text || '載入中…' }}</div></transition>
   `,
 };
 

@@ -3,6 +3,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from
 import {
   sb, state, q, rpc, toast, toastErr, beep, todayISO, addDays, rocOf, mdOf, weekOf, fmtNo, dtOf, timeOf, validOrderNo,
   ensureOperator, askStaff, setOperator, storeSetting, bump, CIRCLED, shortHosp, fullOf,
+  withBusy,
 } from '../lib.js';
 import { RocDate, NotifyPills } from '../components.js';
 import { printList } from '../print.js';
@@ -32,14 +33,14 @@ export default {
       if (!state.storeId || !range.from) return;
       if (!range.to || range.to < range.from) range.to = range.from;
       try {
-        const [list, lt, dc] = await Promise.all([
+        const [list, lt, dc] = await withBusy(Promise.all([
           q(sb.from('rx_fill_view').select('*').eq('store_id', state.storeId).neq('order_status', 'cancelled').neq('fill_status', 'cancelled')
             .gte('due_date', range.from).lte('due_date', range.to).order('order_no').limit(1000)),
           q(sb.from('rx_fill_view').select('fill_id,due_date').eq('store_id', state.storeId).neq('order_status', 'cancelled').eq('fill_status', 'pending')
             .lt('due_date', todayISO()).gte('due_date', addDays(todayISO(), -60)).order('due_date').limit(300)),
           rpc('rx_due_counts', { p_store: state.storeId, p_from: todayISO(), p_to: addDays(todayISO(), DAYS - 1) }),
           q(sb.from('rx_stores').select('settings').eq('id', state.storeId).single()),
-        ]).then(r => { lastPrep.value = r[3]?.settings?.last_prep_date || ''; return r; });
+        ]), '載入中…').then(r => { lastPrep.value = r[3]?.settings?.last_prep_date || ''; return r; });
         rows.value = list; late.value = lt;
         const m = Object.fromEntries(dc.map(d => [d.due_date, d]));
         days.value = Array.from({ length: DAYS }, (_, i) => { const d = addDays(todayISO(), i); return { d, total: m[d]?.total || 0, pending: m[d]?.pending || 0 }; });

@@ -28,7 +28,7 @@ export const state = reactive({
   ready: false, user: null, profile: null, authMsg: '',
   stores: [], storeId: null, depts: [], settings: {},
   staff: [], quick: [], phrases: [],
-  route: 'entry', detailId: null, ask: null, toasts: [], tick: 0, counts: {},
+  route: 'entry', detailId: null, ask: null, toasts: [], tick: 0, counts: {}, busy: [],
   operator: null, bridge: 'off', confirm: null,
   draft: null, lastSaved: null,          // 寄單輸入暫存：切換頁面保留，登出／重新整理／切換門市才清空
   searchSaved: null,                     // 寄單查詢條件：切換頁面保留，登出／重新整理才清空
@@ -446,4 +446,13 @@ export function installScanGuard() {
   if (sgInstalled) return;
   sgInstalled = true;
   window.addEventListener('keydown', sgKey, true);
+}
+
+// ---------------- 進行中提示（切換門市、查詢等）----------------
+// 包住較慢的查詢：超過 0.25 秒畫面上方中央會出現「搜尋中…」小提示，完成後自動消失
+let busySeq = 0;
+export async function withBusy(p, text = '搜尋中…') {
+  const id = ++busySeq;
+  state.busy.push({ id, text });
+  try { return await p; } finally { const i = state.busy.findIndex(x => x.id === id); if (i >= 0) state.busy.splice(i, 1); }
 }

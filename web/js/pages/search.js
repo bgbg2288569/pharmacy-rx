@@ -1,6 +1,6 @@
 // 寄單查詢：多條件、模糊搜尋、欄位排序（表格不換行，過長以 … 顯示，滑鼠移上可看全文）
 import { ref, reactive, computed, watch, onMounted } from 'vue';
-import { state, rpc, toast, toastErr, todayISO, addDays, rocOf, fullOf, dtOf, fmtNo, isAdmin, storeSetting, shortHosp, ageOf, FILL_STATUS, ORDER_STATUS } from '../lib.js';
+import { state, rpc, toast, toastErr, todayISO, addDays, rocOf, fullOf, dtOf, fmtNo, isAdmin, storeSetting, shortHosp, ageOf, FILL_STATUS, ORDER_STATUS, withBusy } from '../lib.js';
 import { RocDate, FillChip, NotifyPills, DeptInput } from '../components.js';
 import { printList, printOrder } from '../print.js';
 
@@ -43,7 +43,7 @@ export default {
       const my = ++seq;
       loading.value = true;
       try {
-        const r = await rpc('rx_search', { p });
+        const r = await withBusy(rpc('rx_search', { p }), '搜尋中…');
         if (my === seq) { rows.value = r; searched.value = true; }
       } catch (e) { if (my === seq) toastErr(e); } finally { if (my === seq) loading.value = false; }
     }

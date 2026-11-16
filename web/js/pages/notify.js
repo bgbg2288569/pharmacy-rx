@@ -4,6 +4,7 @@ import { ref, computed, watch, onMounted } from 'vue';
 import {
   sb, state, q, rpc, toast, toastErr, todayISO, addDays, rocOf, weekOf, fmtNo, dtOf, fullOf, diffDays,
   ensureOperator, askStaff, setOperator, storeSetting, fillTpl, copyText, bump, NOTIFY, CIRCLED, shortHosp, selfOnly, FILL_STATUS,
+  withBusy,
 } from '../lib.js';
 import { NotifyPills } from '../components.js';
 
@@ -22,10 +23,10 @@ export default {
       if (!state.storeId) return;
       try {
         const base = () => sb.from('rx_fill_view').select('*').eq('store_id', state.storeId).neq('order_status', 'cancelled');
-        const [prep, done] = await Promise.all([
+        const [prep, done] = await withBusy(Promise.all([
           q(base().eq('fill_status', 'prepared').order('due_date').limit(1000)),
           q(base().eq('fill_status', 'notified').gte('notified_at', new Date(Date.now() - 7 * 864e5).toISOString()).order('notified_at', { ascending: false }).limit(1000)),
-        ]);
+        ]), '載入中…');
         rows.value = [...prep, ...done];
         const fams = [...new Set(rows.value.map(r => r.family_no).filter(Boolean))];
         famRows.value = fams.length
