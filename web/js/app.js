@@ -91,8 +91,8 @@ const App = {
       state.authMsg = '';
       try {
         const prof = await q(sb.from('rx_users').select('*').eq('id', user.id).maybeSingle());
-        if (!prof || !prof.active) { state.authMsg = '此帳號尚未啟用，請聯絡管理員。'; await sb.auth.signOut(); return; }
-        if (prof.role !== 'admin' && !prof.store_id) { state.authMsg = '此帳號尚未指定門市，請聯絡管理員。'; await sb.auth.signOut(); return; }
+        if (!prof || !prof.active) { state.authMsg = '此帳號尚未啟用，請聯絡管理員。'; await localSignOut(); return; }
+        if (prof.role !== 'admin' && !prof.store_id) { state.authMsg = '此帳號尚未指定門市，請聯絡管理員。'; await localSignOut(); return; }
         state.profile = prof;
         await loadCommon();
         const saved = ls.get('admin_store', null);
@@ -130,11 +130,15 @@ const App = {
     async function idleLogout() {
       if (!state.user) return;
       state.dirty = {};                              // 逾時登出不再詢問未儲存變更
-      await sb.auth.signOut().catch(() => {});
+      await localSignOut();
       clearSession();
       state.authMsg = '已閒置超過 4 小時，系統已自動登出，請重新登入。';
     }
     const checkIdle = () => { if (state.user && idleExpired()) idleLogout(); };
+    // 等待最多 ms 毫秒，逾時就放棄（避免網路或登入狀態異常時畫面一直停在「載入中」）
+    const withTimeout = (p, ms) => Promise.race([Promise.resolve(p).catch(() => null), new Promise(r => setTimeout(() => r(null), ms))]);
+    // 只清除這台瀏覽器的登入狀態（不連線伺服器，不會卡住）
+    const localSignOut = () => withTimeout(sb.auth.signOut({ scope: 'local' }), 3000);
     let timer, idleTimer;
     onMounted(async () => {
       readHash();
@@ -145,12 +149,16 @@ const App = {
       for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) window.addEventListener(ev, markActive, { passive: true, capture: true });
       document.addEventListener('visibilitychange', () => { if (!document.hidden) checkIdle(); });
       idleTimer = setInterval(checkIdle, 60000);
-      const { data } = await sb.auth.getSession();
-      if (data.session && idleExpired()) {           // 上次操作已超過 4 小時：直接登出，不自動登入
-        await sb.auth.signOut().catch(() => {});
-        state.authMsg = '已閒置超過 4 小時，系統已自動登出，請重新登入。';
-      } else if (data.session) { markActive(); await afterLogin(data.session.user); }
-      state.ready = true;
+      try {
+        const res = await withTimeout(sb.auth.getSession(), 8000);
+        const session = res?.data?.session;
+        if (session && idleExpired()) {              // 上次操作已超過 4 小時：直接登出，不自動登入
+          await localSignOut();
+          state.authMsg = '已閒置超過 4 小時，系統已自動登出，請重新登入。';
+        } else if (session) { markActive(); await withTimeout(afterLogin(session.user), 15000); }
+      } finally {
+        state.ready = true;                          // 無論如何都要離開「載入中」
+      }
       sb.auth.onAuthStateChange((ev, session) => {
         if (ev === 'SIGNED_IN' && session && session.user.id !== state.user?.id) { lastMark = 0; markActive(); afterLogin(session.user); }
         if (ev === 'SIGNED_OUT') clearSession();
