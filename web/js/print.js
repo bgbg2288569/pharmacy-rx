@@ -53,21 +53,19 @@ const notifyTags = m => (m || []).map(x => `<span class="tg">${esc(x)}</span>`).
 function labelHtml(o, fills) {
   const fs = fillsActive(fills);
   const RW = 19;                                        // 右側文字欄寬度
-  // 醫院／科別／電話固定三行：沒有資料時留空白，行高不變
-  const info = [
-    ['h', shortHosp(o.hospital_code, o.hospital_name), 3.2],
-    ['d', o.dept_name, 3.2],
-    ['p', o.phone, 3.7],
-  ].map(([k, t, mx]) => `<div class="${k}" style="font-size:${t ? fit(t, RW, mx) : mx}mm">${t ? esc(t) : '&nbsp;'}</div>`).join('');
+  // 右側固定四列（高度固定，不受字型行高影響）：醫院、科別、通知方式、電話；沒有資料的列留白
+  const row = (k, t, mx) => `<div class="r ${k}"><span style="font-size:${t ? fit(t, RW, mx) : mx}mm">${t ? esc(t) : ''}</span></div>`;
   const tags = notifyTags(o.notify_methods);
+  const info = row('h', shortHosp(o.hospital_code, o.hospital_name), 3.1) + row('d', o.dept_name, 3.1)
+    + `<div class="r tgs">${tags}</div>` + row('p', o.phone, 3.5);
   // 領藥日：只印月/日，序號用 ➊➋➌；一次排一列，次數越少字越大
-  const dsz = fs.length >= 3 ? 4.1 : fs.length === 2 ? 5.3 : 6;
+  const dsz = fs.length >= 3 ? 3.7 : fs.length === 2 ? 5.2 : 6;
   const fl = fs.map(f => `<span><b>${SEQ_MARK[f.seq] || f.seq}</b>${mdOf(f.due_date)}</span>`).join('');
   return `<div class="lb">
     <div class="hd"><div class="hl">${LOGO_MONO}<span class="cp">藥局聯</span></div><div class="nm" style="font-size:${fit(o.patient_name, 20.8, 5.6)}mm">${esc(o.patient_name)}</div></div>
     <div class="mid">
       <div class="qrw"><div class="qr">${qrSvg(o.order_no)}</div><div class="no">${esc(fmtNo(o.order_no))}</div></div>
-      <div class="info">${info}<div class="tgs">${tags || '&nbsp;'}</div></div>
+      <div class="info">${info}</div>
     </div>
     <div class="fl" style="font-size:${dsz}mm">${fl}</div>
   </div>`;
@@ -174,26 +172,27 @@ const CSS = {
     .hd .lg{width:5.4mm;height:5.4mm;flex:none}
     .hd .cp{flex:none;background:#000;color:#fff;font-size:2.3mm;font-weight:700;padding:.5mm .6mm;border-radius:.6mm;line-height:1.1}
     .hd .nm{flex:1;min-width:0;font-weight:900;white-space:nowrap;overflow:hidden;line-height:1}
-    .mid{display:flex;gap:1.6mm;align-items:center;flex:1;min-height:0;padding-bottom:.6mm}
-    .qrw{flex:none;width:13.4mm;text-align:center}
+    .mid{display:flex;gap:1.6mm;align-items:flex-start;height:15.6mm;flex:none;overflow:hidden}
+    .qrw{flex:none;width:13.4mm;text-align:center;padding-top:.2mm}
     .qr{width:12.6mm;height:12.6mm;margin:0 auto}.qr svg{width:100%;height:100%;display:block}
     .no{font-size:1.95mm;font-family:Arial,sans-serif;margin-top:.3mm;white-space:nowrap;letter-spacing:-.03mm}
-    .info{min-width:0;flex:1;line-height:1.14;font-weight:400}
-    .info>div{white-space:nowrap;overflow:hidden}
-    .info .p{font-family:Arial,sans-serif;letter-spacing:-.02mm}
-    .info>.tgs{display:flex;gap:.8mm;margin-top:.3mm;height:4mm;align-items:center;overflow:visible;padding-left:.2mm}
-    .tg{border:.3mm solid #000;border-radius:.6mm;padding:0 .8mm;font-size:2.6mm;font-weight:700;font-family:Arial,${FONT};line-height:1.2}
-    .fl{border-top:.3mm solid #000;padding-top:.3mm;font-family:Arial,${FONT};font-weight:700;
-      display:flex;justify-content:space-around;white-space:nowrap;line-height:1.05}
+    .info{min-width:0;flex:1;font-weight:400}
+    .r{display:flex;align-items:center;white-space:nowrap;overflow:hidden;line-height:1}
+    .r.h,.r.d{height:3.6mm}.r.tgs{height:4.6mm;gap:.8mm;overflow:visible;padding-left:.2mm}.r.p{height:3.8mm}
+    .r.p{font-family:Arial,sans-serif;letter-spacing:-.02mm}
+    .tg{border:.3mm solid #000;border-radius:.6mm;padding:.25mm .7mm;font-size:2.5mm;font-weight:700;font-family:Arial,${FONT};line-height:1}
+    .fl{border-top:.3mm solid #000;flex:1;min-height:0;font-family:Arial,${FONT};font-weight:700;
+      display:flex;align-items:center;justify-content:space-around;white-space:nowrap;line-height:1;overflow:hidden}
     .fl span{display:flex;align-items:center}
     .fl b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;
       font-size:.72em;line-height:1;margin-right:.2em}`,
   // 57mm 發票紙（可印寬度約 48mm）；只用純黑，不用灰色
+  // 靠左排、寬 46mm：發票機的可列印範圍從紙張左邊算起，置中的話紙張設定偏寬時會整個往右跑、右邊被切掉
   receipt: `@page{margin:0}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000;background:#fff}
     .pg{--f1:17pt;--f2:12.5pt;--f3:10.5pt;--f4:8.5pt;--fd:20pt;--fm:9.3pt;--ft:7.6pt;--g:1.6mm;--b1:.3mm;--b2:.6mm;--lg:7.5mm;--qr:14mm;
-      width:48mm;margin:0 auto;padding:2mm 0 6mm;break-after:page;page-break-after:always}${SLIP}`,
+      width:46mm;margin:0;padding:2mm 0 6mm 1mm;break-after:page;page-break-after:always}${SLIP}`,
   // A5：同一風格放大
   a5: `@page{size:A5;margin:9mm 10mm}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
