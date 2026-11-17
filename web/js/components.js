@@ -54,7 +54,7 @@ export const RocCalendar = {
 // ---------------------------------------------------------------- 民國日期（畫面顯示 MM/DD）
 export const RocDate = {
   props: {
-    modelValue: String, base: String, seq: { type: Number, default: 0 }, disabled: Boolean, birth: Boolean, compact: Boolean,
+    modelValue: String, dates: Array, seq: { type: Number, default: 0 }, disabled: Boolean, birth: Boolean, compact: Boolean,
     placeholder: { type: String, default: '例 1120 或 1151120' },
   },
   emits: ['update:modelValue'],
@@ -94,10 +94,19 @@ export const RocDate = {
       calOpen.value = !calOpen.value;
     }
     function fromCal(v) { calOpen.value = false; emit('update:modelValue', v); input.value?.focus(); }
-    // 第二、三次領藥日：與診所（處方 QR）相同算法 = 第一次 + 天數 ×（第幾次 − 1）− 9
-    // 例：28 天、第一次 10/27 → 第二次 11/15、第三次 12/13
+    // 第二、三次領藥日：與診所（處方 QR）相同算法，以「前面最近一次有填的日期」為基準
+    //   基準是第一次：第一次 + 天數 ×（第幾次 − 1）− 9（例：28 天、10/27 → 11/15、12/13）
+    //   基準是第二次（只寄第二、三次）：第二次 + 天數 ×（相差次數）（例：11/15 → 12/13）
     const LEAD = 9;
-    const plus = n => { if (props.base) emit('update:modelValue', addDays(props.base, n * (props.seq - 1) - LEAD)); };
+    const baseOf = () => {
+      for (let k = props.seq - 1; k >= 1; k--) { const d = props.dates?.[k - 1]; if (d) return { k, d }; }
+      return null;
+    };
+    const base = computed(() => baseOf());
+    const plus = n => {
+      const b = base.value; if (!b) return;
+      emit('update:modelValue', addDays(b.d, n * (props.seq - b.k) - (b.k === 1 ? LEAD : 0)));
+    };
     // 日期只能輸入數字和 /；生日另可輸入 *（醫院隱碼）
     function onInput(e) {
       const v = e.target.value.replace(props.birth ? /[^\d\/*]/g : /[^\d\/]/g, '');
@@ -115,7 +124,7 @@ export const RocDate = {
       return d === 0 ? '今天' : d > 0 ? `${d}天後` : `${-d}天前`;
     });
     const full = computed(() => (props.modelValue ? '民國 ' + fullOf(props.modelValue) + (isMasked(props.modelValue) ? '（含隱碼）' : '') : ''));
-    return { text, err, picker, input, wrap, calOpen, calUp, commit, onKey, onInput, openPicker, fromCal, plus, clear, suffix, rel, full };
+    return { text, err, picker, input, wrap, calOpen, calUp, commit, onKey, onInput, openPicker, fromCal, plus, base, clear, suffix, rel, full };
   },
   template: `<div ref="wrap" style="position:relative">
     <div class="rocd" :class="{err}" :title="full">
@@ -126,9 +135,9 @@ export const RocDate = {
       <button type="button" class="cal" tabindex="-1" title="民國年日曆" :disabled="disabled" @click="openPicker">📅</button>
     </div>
     <RocCalendar v-if="calOpen" :model-value="modelValue" :birth="birth" :up="calUp" @pick="fromCal" @close="calOpen=false" />
-    <div class="plus" v-if="seq > 1 && !disabled && !compact"><span class="tiny muted">{{ modelValue ? rel : (base ? '依第一次・處方天數' : '先填第一次') }}</span>
+    <div class="plus" v-if="seq > 1 && !disabled && !compact"><span class="tiny muted">{{ modelValue ? rel : (base ? '依第' + base.k + '次・處方天數' : '先填前一次') }}</span>
       <button type="button" tabindex="-1" v-for="n in [28, 29, 30]" :key="n" :disabled="!base"
-        :title="base ? '第一次 + ' + n + ' 天 × ' + (seq - 1) + ' − 9 天' : '請先填第一次領藥日'" @click="plus(n)">{{n}}天</button>
+        :title="!base ? '請先填前一次領藥日' : base.k === 1 ? '第一次 + ' + n + ' 天 × ' + (seq - 1) + ' − 9 天' : '第' + base.k + '次 + ' + n * (seq - base.k) + ' 天'" @click="plus(n)">{{n}}天</button>
     </div>
     <div class="tiny muted" v-else-if="rel">{{rel}}</div>
   </div>`,
@@ -636,6 +645,7 @@ export const OrderForm = {
       if (f.phone && f.phone.length < 8) errs.phone = '電話位數不足';
       if (/^09/.test(f.phone || '') && f.phone.length !== 10) errs.phone = '手機（09 開頭）須為 10 碼';
       if (f.birth_date && f.birth_date > todayISO()) errs.birth = '生日不能晚於今天';
+      if (!f.hospital_code) errs.hosp = f.hospital_name ? `「${f.hospital_name}」不在醫院清單內，請從清單選擇醫院` : '請選擇醫院（輸入快速碼、院所代號或名稱後從清單點選）';
       if (!f.dates.some(Boolean)) errs.dates = '請至少輸入一次領藥日期';
       const d = f.dates.filter(Boolean);
       for (let i = 1; i < d.length; i++) if (d[i] < d[i - 1]) errs.dates = '後一次的日期早於前一次，請確認';
@@ -686,7 +696,7 @@ export const OrderForm = {
           ? await rpc('rx_update_order', { p_id: props.order.id, p, p_staff: staff.code })
           : await rpc('rx_create_order', { p, p_staff: staff.code });
         if (print) {
-          printOrder({ ...p, id: res.id, order_no: res.order_no, created_at: new Date().toISOString(), created_staff_name: staff.name },
+          printOrder({ ...p, id: res.id, order_no: res.order_no, created_at: new Date().toISOString(), created_staff_code: staff.code, created_staff_name: staff.name },
             p.fills.map(x => ({ ...x, status: 'pending' })), printMode.value);
         }
         toast(`${edit.value ? '已更新' : '已寄單'}　${fmtNo(res.order_no)}　${p.patient_name}`, 'ok', 3500);
@@ -838,8 +848,9 @@ export const OrderForm = {
 
       <div class="fld c7" data-k="hosp">
         <label>醫院 <span class="opt" v-if="f.hospital_code">{{f.hospital_code}}</span>
-          <span class="opt" style="color:var(--orange-ink)" v-else-if="f.hospital_name">清單外醫院</span></label>
-        <HospitalInput v-model:code="f.hospital_code" v-model:name="f.hospital_name" @pick="onHospPick" />
+          <span class="opt" style="color:var(--red-ink,#c0392b)" v-else-if="f.hospital_name">不在清單內，請重新選擇</span></label>
+        <HospitalInput :class="{err: errs.hosp}" v-model:code="f.hospital_code" v-model:name="f.hospital_name" @pick="onHospPick" />
+        <div class="hint err" v-if="errs.hosp">{{errs.hosp}}</div>
       </div>
       <div class="fld c5" data-k="dept">
         <label>科別 <span class="opt">科別代碼／名稱</span></label>
@@ -863,7 +874,7 @@ export const OrderForm = {
       <div class="fld c4" v-for="i in 3" :key="i" :data-k="'d'+i">
         <label :class="'lq'+i">第{{['一','二','三'][i-1]}}次領藥
           <span class="pill" v-if="edit && fillOf(i)" :class="fillOf(i).status">{{FILL_STATUS[fillOf(i).status]}}</span></label>
-        <RocDate v-model="f.dates[i-1]" placeholder="" :base="f.dates[0]" :seq="i" :disabled="edit && ['notified','picked'].includes(fillOf(i)?.status)" />
+        <RocDate v-model="f.dates[i-1]" placeholder="" :dates="f.dates" :seq="i" :disabled="edit && ['notified','picked'].includes(fillOf(i)?.status)" />
       </div>
       <div class="fld c12" v-if="errs.dates"><div class="hint err">{{errs.dates}}</div></div>
 

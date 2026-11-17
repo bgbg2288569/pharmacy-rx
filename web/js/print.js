@@ -46,158 +46,155 @@ function notifyText(m) {
   return n.length ? n.join('/') + '通知' : '自取';
 }
 const SEQ_MARK = { 1: '➊', 2: '➋', 3: '➌' };
-function labelHtml(o, fills) {
-  const fs = fillsActive(fills);
-  const W = 37;                                         // 可用寬度（40mm − 左右邊界）
-  const RW = 20.2;                                      // 右側文字欄寬度（姓名與醫院等同寬）
-  const lines = [
-    ['h', shortHosp(o.hospital_code, o.hospital_name)],
-    ['d', o.dept_name],
-    ['p', o.phone],
-    ['n', notifyText(o.notify_methods)],
-  ].filter(x => x[1]);
-  const lineMax = lines.length <= 3 ? 3.4 : 3;
-  const info = lines.map(([k, t]) => `<div class="${k}" style="font-size:${fit(t, RW, lineMax)}mm">${esc(t)}</div>`).join('');
-  // 領藥日：序號用 ➊➋➌（實心黑圓白字的文字符號，不靠底色，熱感印表機也印得出來）
-  const each = fs.length ? W / fs.length : W;
-  const dsz = Math.min(5.2, (each - 1.2) / 3.8).toFixed(2);
-  const fl = fs.map(f => `<span><b>${SEQ_MARK[f.seq] || f.seq}</b>${mdOf(f.due_date)}</span>`).join('');
-  return `<div class="lb">
-    <div class="mid">
-      <div class="qrw"><div class="qr">${qrSvg(o.order_no)}</div><div class="no">${esc(fmtNo(o.order_no))}</div></div>
-      <div class="info">
-        <div class="nm" style="font-size:${fit(o.patient_name, RW, 5.6)}mm">${esc(o.patient_name)}</div>
-        ${info}
-      </div>
-    </div>
-    <div class="fl${fs.length === 1 ? ' one' : ''}" style="font-size:${dsz}mm">${fl}</div>
-  </div>`;
-}
-
-// 57mm 熱感發票紙：上半「藥局聯」（留店內，含完整電話、通知方式、備註），撕線下「客戶聯」（給客人，含醫院科別與領藥日）
 // 熱感機 203dpi、只能印純黑：Logo 用單色兩個圓（實心＋圓環），不用漸層、灰階與細線
 const LOGO_MONO = `<svg viewBox="0 0 40 40" class="lg" aria-hidden="true"><circle cx="14.5" cy="24" r="10" fill="#000"/><circle cx="25.5" cy="15.5" r="8.6" fill="none" stroke="#fff" stroke-width="8"/><circle cx="25.5" cy="15.5" r="8.6" fill="none" stroke="#000" stroke-width="4.2"/></svg>`;
-function receiptHtml(o, fills) {
+// 通知方式 → 外框標籤（LINE、簡訊、電話、自取）
+const notifyTags = m => (m || []).map(x => `<span class="tg">${esc(x)}</span>`).join('');
+function labelHtml(o, fills) {
   const fs = fillsActive(fills);
-  const store = esc(curStore()?.name || '');
-  const no = esc(fmtNo(o.order_no));
-  const hosp = esc(shortHosp(o.hospital_code, o.hospital_name) || o.hospital_name || '');
-  const dates = fs.map(f => `<div class="d"><b>${SEQ_MARK[f.seq] || f.seq}</b><span class="md">${rocOf(f.due_date, true)}</span></div>`).join('')
-    || '<div class="d none">（未排定）</div>';
-  const notify = (o.notify_methods || []);
-  const footer = esc(storeSetting('receipt_footer', ''));
-  const head = (copy) => `<div class="top">${LOGO_MONO}<div class="sn"><div class="s1">${store}</div><div class="s2">慢性處方箋寄單</div></div><div class="cp">${copy}</div></div>`;
-  return `<div class="rc">
-    ${head('藥局聯')}
-    <div class="idrow"><div class="qr">${qrSvg(o.order_no)}</div>
-      <div class="idt"><div class="lbl">寄單編號</div><div class="no">${no}</div></div></div>
-    <div class="nm">${esc(o.patient_name)}</div>
-    ${o.phone ? `<div class="ph">${esc(o.phone)}</div>` : ''}
-    <div class="sec">通知方式</div>
-    <div class="nt">${notify.length ? notify.map(m => `<span>${esc(m)}</span>`).join('') : '<em>未指定</em>'}</div>
-    <div class="sec">領藥日</div>
-    <div class="ds">${dates}</div>
-    ${hosp || o.dept_name ? `<div class="hp">${hosp}${o.dept_name ? '｜' + esc(o.dept_name) : ''}</div>` : ''}
-    ${o.note ? `<div class="sec">備註</div><div class="memo">${esc(o.note)}</div>` : ''}
-    <div class="meta">${dtOf(o.created_at || new Date())}${o.created_staff_name ? '　' + esc(o.created_staff_name) : ''}</div>
-    <div class="cut">✂ ─ ─ ─ 請沿此線撕開 ─ ─ ─</div>
-    ${head('客戶聯')}
-    <div class="nm">${esc(o.patient_name)}<small>${o.birth_date ? fullOf(o.birth_date) : ''}</small></div>
-    <table class="kv">
-      ${hosp ? `<tr><th>醫院</th><td>${hosp}</td></tr>` : ''}
-      ${o.dept_name ? `<tr><th>科別</th><td>${esc(o.dept_name)}</td></tr>` : ''}
-      ${o.phone ? `<tr><th>電話</th><td class="num">${esc(maskPhone(o.phone))}</td></tr>` : ''}
-      <tr><th>編號</th><td class="num">${no}</td></tr>
-    </table>
-    <div class="sec">領藥日</div>
-    <div class="ds">${dates}</div>
-    <div class="tip">藥品預作完成後依您選擇的方式通知，領藥請攜帶健保卡與本單。</div>
-    ${footer ? `<div class="ft">${footer}</div>` : ''}
+  const RW = 19;                                        // 右側文字欄寬度
+  const info = [
+    ['h', shortHosp(o.hospital_code, o.hospital_name), 3.4],
+    ['d', o.dept_name, 3.4],
+    ['p', o.phone, 4.2],
+  ].filter(x => x[1]).map(([k, t, mx]) => `<div class="${k}" style="font-size:${fit(t, RW, mx)}mm">${esc(t)}</div>`).join('');
+  const tags = notifyTags(o.notify_methods);
+  // 領藥日：只印月/日，序號用 ➊➋➌；一次排一列，次數越少字越大
+  const dsz = fs.length >= 3 ? 4.1 : fs.length === 2 ? 5.3 : 6;
+  const fl = fs.map(f => `<span><b>${SEQ_MARK[f.seq] || f.seq}</b>${mdOf(f.due_date)}</span>`).join('');
+  return `<div class="lb">
+    <div class="hd"><div class="nm" style="font-size:${fit(o.patient_name, 30, 5.4)}mm">${esc(o.patient_name)}</div>${LOGO_MONO}</div>
+    <div class="mid">
+      <div class="qrw"><div class="qr">${qrSvg(o.order_no)}</div><div class="no">${esc(fmtNo(o.order_no))}</div></div>
+      <div class="info">${info}${tags ? `<div class="tgs">${tags}</div>` : ''}</div>
+    </div>
+    <div class="fl" style="font-size:${dsz}mm">${fl}</div>
   </div>`;
 }
 
+// 民國年月日 時:分（例 115/11/17 20:48）
+const rocDT = ts => {
+  const d = new Date(ts || Date.now()); const p2 = n => String(n).padStart(2, '0');
+  return `${d.getFullYear() - 1911}/${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+};
+// 單據共用區塊（57mm 與 A5 同一套版面，A5 只是放大）
+function slipParts(o) {
+  const store = esc(curStore()?.name || '');
+  const head = copy => `<div class="top">${LOGO_MONO}<div class="sn"><div class="s1">${store}</div><div class="s2">慢性處方箋寄單</div></div><div class="cp">${copy}</div></div>`;
+  const id = `<div class="id"><div class="qr">${qrSvg(o.order_no)}</div><div class="it">
+      <div class="no">${esc(fmtNo(o.order_no))}</div>
+      <div>${esc(shortHosp(o.hospital_code, o.hospital_name) || o.hospital_name || '')}</div>
+      <div>${esc(o.dept_name || '')}</div></div></div>`;
+  const contact = `<div class="ct">${notifyTags(o.notify_methods)}<span class="ph">${esc(o.phone || '')}</span></div>`;
+  const meta = `<div class="meta"><span>${rocDT(o.created_at)}</span>${o.created_staff_code ? `<span>輸入人員：${esc(o.created_staff_code)}</span>` : ''}</div>`;
+  const msg = `<div class="msg">藥品準備完成後會通知您。<br>請於接到通知後10天內，攜帶<br>「健保卡」來藥局領藥！</div>
+    <div class="tips"><div>☀ 建議收到通知後，再來藥局領藥。</div><div>☀ 領藥時出示本單據可加快現場作業。</div></div>`;
+  const ft = storeSetting('receipt_footer', '');
+  const footer = ft ? `<div class="ft">${esc(ft)}</div>` : '';
+  const dates = (fs, hl) => fs.map(f => `<div class="d${f.seq === hl ? ' hl' : ''}"><b>${SEQ_MARK[f.seq] || f.seq}</b>${fullOf(f.due_date)}</div>`).join('')
+    || '<div class="d">（未排定）</div>';
+  return { head, id, contact, meta, msg, footer, dates };
+}
+// 57mm：每一次領藥各印一張「藥局聯」（該次日期反黑，跟著該次藥袋），最後一張「客戶聯」；每張一頁，發票機自動裁切
+function receiptHtml(o, fills) {
+  const fs = fillsActive(fills);
+  const P = slipParts(o);
+  const nm = `<div class="nm">${esc(o.patient_name)}</div>`;
+  const note = o.note ? `<div class="note">${esc(o.note)}</div>` : '';
+  const shop = (fs.length ? fs : [{ seq: 0 }]).map(f => `<div class="pg">
+    ${P.head('藥局聯')}${nm}${P.id}<hr>
+    ${P.contact}
+    <div class="ds">${P.dates(fs, f.seq)}</div>${note}
+    <hr>${P.meta}
+  </div>`).join('');
+  const cust = `<div class="pg">
+    ${P.head('客戶聯')}${nm}${P.id}<hr>
+    <div class="lbl">預計領藥時間</div>
+    <div class="ds">${P.dates(fs, 0)}</div>
+    ${P.msg}${P.footer}
+    <hr>${P.meta}
+  </div>`;
+  return shop + cust;
+}
+
+// A5：與 57mm 同一風格，一張紙放完整資料（電話、通知、預計領藥時間、提醒）
 function a5Html(o, fills) {
-  const rows = fillsActive(fills).map(f => `<tr><td>第 ${f.seq} 次</td><td class="r">${rocOf(f.due_date, true)}</td><td class="ck"></td></tr>`).join('');
-  return `<div class="a5">
-    <div class="hd"><div><div class="st">${esc(curStore()?.name || '')}</div><div class="tt">慢性處方箋寄單</div></div>
-      <div class="qr">${qrSvg(o.order_no)}</div></div>
-    <div class="no">寄單編號 ${esc(fmtNo(o.order_no))}</div>
-    <table class="info">
-      <tr><th>姓名</th><td class="b">${esc(o.patient_name)}</td><th>生日</th><td>${o.birth_date ? fullOf(o.birth_date) : ''}</td></tr>
-      <tr><th>電話</th><td>${esc(o.phone || '')}</td><th>通知</th><td>${esc((o.notify_methods || []).join('、'))}</td></tr>
-      <tr><th>醫院</th><td colspan="3">${esc(o.hospital_name || '')}</td></tr>
-      <tr><th>科別</th><td colspan="3" class="b">${esc(o.dept_name || '')}</td></tr>
-    </table>
-    <table class="fl"><tr><th>次數</th><th class="r">領藥日</th><th>預作確認</th></tr>${rows}</table>
-    ${o.note ? `<div class="nt">備註：${esc(o.note)}</div>` : ''}
-    <div class="ft">寄單時間 ${dtOf(o.created_at || new Date())}${o.created_staff_name ? ' · ' + esc(o.created_staff_name) : ''}　${esc(storeSetting('receipt_footer', ''))}</div>
+  const fs = fillsActive(fills);
+  const P = slipParts(o);
+  return `<div class="pg a5">
+    ${P.head('寄單單據')}
+    <div class="nm">${esc(o.patient_name)}${o.birth_date ? `<small>${fullOf(o.birth_date)}</small>` : ''}</div>
+    ${P.id}<hr>
+    ${P.contact}<hr>
+    <div class="lbl">預計領藥時間</div>
+    <div class="ds">${P.dates(fs, 0)}</div>
+    ${o.note ? `<div class="note">備註：${esc(o.note)}</div>` : ''}
+    ${P.msg}${P.footer}
+    <hr>${P.meta}
   </div>`;
 }
+
+// 57mm 與 A5 共用的版面樣式（尺寸用 CSS 變數，各自設定）
+const SLIP = `
+    .top{display:flex;align-items:center;gap:var(--g);padding-bottom:var(--g);border-bottom:var(--b2) solid #000}
+    .lg{width:var(--lg);height:var(--lg);flex:none}
+    .sn{flex:1;min-width:0;line-height:1.15}.s1{font-size:var(--f2);font-weight:900;white-space:nowrap}.s2{font-size:var(--f4);font-weight:700;white-space:nowrap}
+    .cp{flex:none;background:#000;color:#fff;font-size:var(--f3);font-weight:900;padding:.15em .5em;border-radius:.25em}
+    .nm{font-size:var(--f1);font-weight:900;line-height:1.2;margin:var(--g) 0 calc(var(--g) * .6);word-break:break-all}
+    .nm small{font-size:var(--f3);font-weight:700;margin-left:.6em;font-family:Arial,sans-serif}
+    .id{display:flex;align-items:center;gap:calc(var(--g) * 1.4)}
+    .qr{width:var(--qr);height:var(--qr);flex:none}.qr svg{width:100%;height:100%;display:block}
+    .it{min-width:0;font-size:var(--f3);line-height:1.45;font-weight:500}
+    .it .no{font-family:Arial,sans-serif;font-weight:700}
+    hr{border:0;border-top:var(--b1) solid #000;margin:calc(var(--g) * 1.2) 0}
+    .ct{display:flex;align-items:center;gap:calc(var(--g) * 1.2);flex-wrap:wrap}
+    .tg{border:var(--b1) solid #000;border-radius:.2em;padding:0 .3em;font-size:var(--f2);font-weight:700;font-family:Arial,${FONT};line-height:1.3}
+    .ph{font-size:var(--f2);font-weight:700;font-family:Arial,sans-serif}
+    .lbl{font-size:var(--f3);font-weight:900}
+    .ds{margin-top:calc(var(--g) * .8)}
+    .d{display:flex;align-items:center;gap:.3em;font-size:var(--fd);font-weight:500;font-family:Arial,"Helvetica Neue",sans-serif;line-height:1.3;padding:.04em .2em;margin:.06em 0;border-radius:.12em}
+    .d b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;font-size:.7em;line-height:1}
+    .d.hl{background:#000;color:#fff;font-weight:700}
+    .note{margin-top:var(--g);font-size:var(--f3);font-weight:700;word-break:break-all}
+    .msg{margin-top:calc(var(--g) * 1.2);background:#000;color:#fff;text-align:center;font-size:var(--fm);white-space:nowrap;font-weight:900;line-height:1.45;padding:.5em .4em;border-radius:.35em}
+    .tips{margin-top:var(--g);font-size:var(--ft);font-weight:500;line-height:1.7;white-space:nowrap}
+    .ft{margin-top:calc(var(--g) * .6);font-size:var(--f4);font-weight:700}
+    .meta{display:flex;align-items:baseline;gap:1.2em;font-size:var(--f4);font-family:Arial,${FONT}}`;
 
 const CSS = {
   label: `@page{size:40mm 30mm;margin:0}
-    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000}
-    .lb{width:40mm;height:30mm;padding:1mm 1.5mm .8mm;box-sizing:border-box;display:flex;flex-direction:column;page-break-after:always;overflow:hidden}
-    .mid{display:flex;gap:1.3mm;align-items:center;flex:1;min-height:0}
-    .qrw{flex:none;width:15.5mm;text-align:center;background:#fff}
-    .qr{width:15mm;height:15mm;margin:0 auto}.qr svg{width:100%;height:100%;display:block}
-    .no{font-size:2.25mm;font-weight:700;font-family:Arial,sans-serif;margin-top:.4mm;white-space:nowrap;letter-spacing:-.03mm}
-    .info{min-width:0;flex:1;line-height:1.13;font-weight:700}
+    .lb{width:40mm;height:30mm;padding:1mm 1.6mm .8mm;display:flex;flex-direction:column;page-break-after:always;overflow:hidden}
+    .hd{display:flex;align-items:center;gap:1mm;height:6mm;flex:none}
+    .hd .nm{flex:1;min-width:0;font-weight:900;white-space:nowrap;overflow:hidden;line-height:1}
+    .hd .lg{width:5.2mm;height:5.2mm;flex:none}
+    .mid{display:flex;gap:1.4mm;align-items:center;flex:1;min-height:0}
+    .qrw{flex:none;width:14mm;text-align:center}
+    .qr{width:13mm;height:13mm;margin:0 auto}.qr svg{width:100%;height:100%;display:block}
+    .no{font-size:2.05mm;font-family:Arial,sans-serif;margin-top:.3mm;white-space:nowrap;letter-spacing:-.03mm}
+    .info{min-width:0;flex:1;line-height:1.18;font-weight:700}
     .info>div{white-space:nowrap;overflow:hidden}
-    .info .nm{font-weight:900;line-height:1.1;margin-bottom:.3mm}
-    .info .p{font-family:Arial,sans-serif;font-weight:900;letter-spacing:-.04mm}
-    .fl{border-top:.55mm solid #000;padding-top:.5mm;font-weight:700;font-family:Arial,${FONT};
-      display:flex;justify-content:space-around;white-space:nowrap;line-height:1.1;letter-spacing:.02em}
+    .info .p{font-family:Arial,sans-serif;font-weight:700;letter-spacing:-.03mm}
+    .tgs{display:flex;gap:.8mm;margin-top:.5mm}
+    .tg{border:.35mm solid #000;border-radius:.6mm;padding:0 .7mm;font-size:2.9mm;font-weight:700;font-family:Arial,${FONT};line-height:1.25}
+    .fl{border-top:.3mm solid #000;padding-top:.4mm;font-family:Arial,${FONT};font-weight:500;
+      display:flex;justify-content:space-around;white-space:nowrap;line-height:1.05}
     .fl span{display:flex;align-items:center}
     .fl b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;
-      font-size:1.08em;line-height:1;position:relative;top:.07em;margin-right:.18em;letter-spacing:0}`,
-  // 57mm 紙、可列印寬度約 48mm；字以粗黑為主，不用灰色（熱感機灰色會變淡或消失）
-  receipt: `@page{size:57mm auto;margin:0}
+      font-size:.75em;line-height:1;margin-right:.18em}`,
+  // 57mm 發票紙（可印寬度約 48mm）；只用純黑，不用灰色
+  receipt: `@page{margin:0}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000;background:#fff}
-    .rc{width:48mm;margin:0 auto;padding:2mm 0 8mm;font-size:10.5pt;line-height:1.3;page-break-after:always}
-    .num,.no,.ph,.md{font-family:Arial,"Helvetica Neue",sans-serif}
-    .top{display:flex;align-items:center;gap:1.6mm;padding-bottom:1.4mm;border-bottom:.6mm solid #000}
-    .lg{width:8mm;height:8mm;flex:none}
-    .sn{flex:1;min-width:0;line-height:1.15}.s1{font-size:12pt;font-weight:900;white-space:nowrap;overflow:hidden}.s2{font-size:8pt;font-weight:700;white-space:nowrap}
-    .cp{flex:none;background:#000;color:#fff;font-weight:900;font-size:10pt;padding:.8mm 1.6mm;border-radius:1mm}
-    .idrow{display:flex;align-items:center;gap:2mm;margin-top:2mm}
-    .qr{width:16mm;height:16mm;flex:none}.qr svg{width:100%;height:100%;display:block}
-    .idt{min-width:0}.lbl{font-size:8.5pt;font-weight:700}.no{font-size:12pt;font-weight:900;white-space:nowrap}
-    .nm{font-size:20pt;font-weight:900;line-height:1.15;margin-top:2mm;word-break:break-all}
-    .nm small{display:block;font-size:10pt;font-weight:700;font-family:Arial,sans-serif;margin-top:.3mm}
-    .ph{font-size:15pt;font-weight:900;letter-spacing:.3mm}
-    .sec{margin-top:2.2mm;font-size:8.5pt;font-weight:900;letter-spacing:.6mm;display:flex;align-items:center;gap:1.2mm}
-    .sec::after{content:"";flex:1;border-top:.35mm solid #000}
-    .nt{display:flex;flex-wrap:wrap;gap:1.2mm;margin-top:.8mm}
-    .nt span{border:.5mm solid #000;border-radius:1mm;padding:.2mm 1.6mm;font-size:13pt;font-weight:900}
-    .nt em{font-style:normal;font-weight:700}
-    .ds{margin-top:.6mm}
-    .d{display:flex;align-items:center;gap:1.6mm;font-size:15pt;font-weight:900;line-height:1.35}
-    .d b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;font-size:16pt;line-height:1}
-    .d.none{font-size:11pt}
-    .hp{margin-top:1.4mm;font-size:10.5pt;font-weight:700}
-    .memo{margin-top:.6mm;font-size:11pt;font-weight:700;word-break:break-all}
-    .meta{margin-top:2mm;font-size:8.5pt;font-weight:700}
-    .cut{margin:4mm 0 3mm;text-align:center;font-size:8.5pt;font-weight:700;white-space:nowrap;overflow:hidden}
-    .kv{width:100%;border-collapse:collapse;margin-top:1.4mm}
-    .kv th{width:9mm;text-align:left;font-size:9pt;font-weight:900;vertical-align:top;padding:.5mm 0;white-space:nowrap}
-    .kv td{font-size:11.5pt;font-weight:700;padding:.5mm 0;word-break:break-all}
-    .tip{margin-top:2.4mm;font-size:9pt;font-weight:700;border:.4mm solid #000;border-radius:1mm;padding:1mm 1.4mm;line-height:1.35}
-    .ft{margin-top:2mm;text-align:center;font-size:9pt;font-weight:700}`,
-  a5: `@page{size:A5;margin:10mm}
-    html,body{margin:0;font-family:${FONT};color:#000;font-size:12pt}
-    .a5{page-break-after:always}
-    .hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:.5mm solid #000;padding-bottom:3mm}
-    .st{font-size:16pt;font-weight:900}.tt{font-size:12pt}
-    .qr{width:28mm;height:28mm}.qr svg{width:100%;height:100%;display:block}
-    .no{font-family:Arial,sans-serif;font-size:14pt;font-weight:900;margin:3mm 0}
-    table{width:100%;border-collapse:collapse;margin-top:2mm}
-    th,td{border:.25mm solid #555;padding:2mm 2.5mm;text-align:left;vertical-align:top}
-    th{background:#eee;width:16mm;white-space:nowrap}.b{font-weight:900;font-size:14pt}.r{text-align:right}
-    .fl td{font-size:14pt;font-weight:700}.fl td.ck{width:30mm}
-    .nt{margin-top:3mm}.ft{margin-top:4mm;font-size:9pt;color:#333}`,
+    .pg{--f1:17pt;--f2:12.5pt;--f3:10.5pt;--f4:8.5pt;--fd:20pt;--fm:9.3pt;--ft:7.6pt;--g:1.6mm;--b1:.3mm;--b2:.6mm;--lg:7.5mm;--qr:14mm;
+      width:48mm;margin:0 auto;padding:2mm 0 6mm;break-after:page;page-break-after:always}${SLIP}`,
+  // A5：同一風格放大
+  a5: `@page{size:A5;margin:12mm}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
+    html,body{margin:0;padding:0;font-family:${FONT};color:#000;background:#fff}
+    .pg{--f1:30pt;--f2:18pt;--f3:14pt;--f4:11pt;--fd:30pt;--fm:16pt;--ft:12pt;--g:3.5mm;--b1:.4mm;--b2:.9mm;--lg:14mm;--qr:30mm;
+      break-after:page;page-break-after:always}${SLIP}`,
 };
 
 /** 列印寄單（mode 省略則用本機設定） */
@@ -206,7 +203,7 @@ export function labelData(o, fills) {
   return {
     order_no: o.order_no, order_no_fmt: fmtNo(o.order_no), patient_name: o.patient_name || '',
     hospital: shortHosp(o.hospital_code, o.hospital_name) || '', dept: o.dept_name || '', phone: o.phone || '',
-    notify: notifyText(o.notify_methods),
+    notify: notifyText(o.notify_methods), notify_methods: o.notify_methods || [],
     fills: fillsActive(fills).map(f => ({ seq: f.seq, md: mdOf(f.due_date) })),
   };
 }

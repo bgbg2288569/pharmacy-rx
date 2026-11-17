@@ -158,7 +158,7 @@ Module RxBridge
 
             Select Case req.Url.AbsolutePath.TrimEnd("/"c).ToLowerInvariant()
                 Case "/health"
-                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.6.0"})
+                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.7.0"})
                 Case "/patients"
                     ' 注意：不能用 req.QueryString —— .NET Framework 會用系統預設編碼（Big5）解碼網址，
                     ' 中文會變亂碼，送進 ODBC 後變成一串 ?，反而查到一堆含 ? 的姓名。這裡自己用 UTF-8 解碼。
@@ -483,6 +483,10 @@ Module RxBridge
         Loop
     End Function
 
+    ' 貼紙 40×30mm（與寄單網站貼紙同版面）：
+    '   上：姓名（大）＋右上 Logo
+    '   中：左 QR＋寄單編號；右 醫院／科別／電話／通知方式外框標籤
+    '   下：細線＋領藥日 ➊➋➌ MM/DD
     Private Sub DrawLabel(g As Graphics, label As Dictionary(Of String, Object), w As Single, h As Single)
         g.PageUnit = GraphicsUnit.Millimeter
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit
@@ -492,21 +496,29 @@ Module RxBridge
         Dim offX = CSng(Val(If(Cfg.ContainsKey("LabelOffsetXmm"), Cfg("LabelOffsetXmm"), "0")))
         Dim offY = CSng(Val(If(Cfg.ContainsKey("LabelOffsetYmm"), Cfg("LabelOffsetYmm"), "0")))
         g.TranslateTransform(offX, offY)
+        ' 右側文字行距倍率（ini LabelLineSpacing，預設 0.95）
+        Dim lineSp = CSng(Val(If(Cfg.ContainsKey("LabelLineSpacing"), Cfg("LabelLineSpacing"), "0.95")))
+        If lineSp < 0.6F OrElse lineSp > 1.5F Then lineSp = 0.95F
 
-        Const L As Single = 1.5F, T As Single = 1.0F
+        Const L As Single = 1.6F, T As Single = 1.0F
+        Const LOGO As Single = 5.2F, HEADH As Single = 6.0F
         Dim innerW = w - L * 2
-        Dim fillsH = 6.4F                               ' 下方領藥日區高度
-        Dim lineY = h - 0.8F - fillsH                   ' 粗線位置
-        Dim qrSize = Math.Min(15.0F, lineY - T - 3.0F)  ' QR 邊長（下方留編號空間）
-        ' QR 往下移（ini LabelQrDownMm，預設 1.5mm；不超過粗線上方可用空間）
-        Dim qrDown = CSng(Val(If(Cfg.ContainsKey("LabelQrDownMm"), Cfg("LabelQrDownMm"), "1.5")))
-        Dim qrTop = T + Math.Max(0F, Math.Min(qrDown, lineY - T - qrSize - 3.2F))
-        ' 右側文字行距倍率（ini LabelLineSpacing，預設 0.88；原本 0.98）
-        Dim lineSp = CSng(Val(If(Cfg.ContainsKey("LabelLineSpacing"), Cfg("LabelLineSpacing"), "0.88")))
-        If lineSp < 0.6F OrElse lineSp > 1.5F Then lineSp = 0.88F
+        Dim fillsH = 6.2F                                ' 下方領藥日區高度
+        Dim lineY = h - 0.8F - fillsH                    ' 分隔線位置
+        Dim midTop = T + HEADH + 0.2F
+        Dim qrSize = Math.Min(13.0F, lineY - midTop - 2.6F)
 
-        ' --- QR ＋ 寄單編號 ---
+        ' --- 上：姓名＋Logo ---
+        Dim nameW = innerW - LOGO - 1.0F
+        Using f = FitFont(g, S(label, "patient_name"), cjk, FontStyle.Bold, 5.4F, nameW)
+            Dim nh = f.GetHeight(g)
+            g.DrawString(S(label, "patient_name"), f, Brushes.Black, L, T + (HEADH - nh) / 2, fmt)
+        End Using
+        DrawLogo(g, w - L - LOGO, T + (HEADH - LOGO) / 2, LOGO)
+
+        ' --- 中左：QR ＋ 寄單編號 ---
         Dim orderNo = S(label, "order_no")
+        Dim qrX = L + (14.0F - qrSize) / 2
         If orderNo <> "" Then
             Using gen As New QRCodeGenerator()
                 Using data = gen.CreateQrCode(orderNo, QRCodeGenerator.ECCLevel.M)
@@ -514,52 +526,71 @@ Module RxBridge
                         Using bmp = qr.GetGraphic(8, Color.Black, Color.White, False)
                             g.InterpolationMode = InterpolationMode.NearestNeighbor
                             g.PixelOffsetMode = PixelOffsetMode.Half
-                            g.DrawImage(bmp, New RectangleF(L, qrTop, qrSize, qrSize))
+                            g.DrawImage(bmp, New RectangleF(qrX, midTop, qrSize, qrSize))
+                            g.PixelOffsetMode = PixelOffsetMode.Default
                         End Using
                     End Using
                 End Using
             End Using
         End If
         Dim noText = If(S(label, "order_no_fmt") <> "", S(label, "order_no_fmt"), orderNo)
-        Using f = FitFont(g, noText, "Arial", FontStyle.Bold, 2.25F, qrSize + 0.5F)
+        Using f = FitFont(g, noText, "Arial", FontStyle.Regular, 2.05F, 14.4F)
             Dim sz = g.MeasureString(noText, f, PointF.Empty, fmt)
-            g.DrawString(noText, f, Brushes.Black, L + (qrSize - sz.Width) / 2, qrTop + qrSize + 0.3F, fmt)
+            g.DrawString(noText, f, Brushes.Black, L + (14.0F - sz.Width) / 2, midTop + qrSize + 0.3F, fmt)
         End Using
 
-        ' --- 右側文字欄 ---
-        Dim rx = L + qrSize + 1.3F
+        ' --- 中右：醫院／科別／電話＋通知標籤 ---
+        Dim rx = L + 14.0F + 1.4F
         Dim rw = w - L - rx
-        Dim lines As New List(Of Tuple(Of String, String, FontStyle, Single))
-        lines.Add(Tuple.Create(S(label, "patient_name"), cjk, FontStyle.Bold, 5.6F))
-        For Each k In {"hospital", "dept", "phone", "notify"}
+        Dim lines As New List(Of Tuple(Of String, String, Single))
+        For Each k In {"hospital", "dept", "phone"}
             Dim txt = S(label, k)
-            If txt <> "" Then lines.Add(Tuple.Create(txt, If(k = "phone", "Arial", cjk), FontStyle.Bold, 3.0F))
+            If txt <> "" Then lines.Add(Tuple.Create(txt, If(k = "phone", "Arial", cjk), If(k = "phone", 4.2F, 3.4F)))
         Next
-        ' 先算總高度，垂直置中於 QR 區
-        Dim fonts = lines.Select(Function(ln) FitFont(g, ln.Item1, ln.Item2, ln.Item3, ln.Item4, rw)).ToList()
+        Dim fonts = lines.Select(Function(ln) FitFont(g, ln.Item1, ln.Item2, FontStyle.Bold, ln.Item3, rw)).ToList()
         Dim heights = fonts.Select(Function(ft) ft.GetHeight(g) * lineSp).ToList()
-        Dim y = T + Math.Max(0, (lineY - T - 0.4F - heights.Sum()) / 2)
+        Dim tags = NotifyTags(label)
+        Dim tagFont As New Font(cjk, 2.9F, FontStyle.Bold, GraphicsUnit.Millimeter)
+        Dim tagH = If(tags.Count > 0, tagFont.GetHeight(g) + 0.9F, 0F)
+        Dim blockH = heights.Sum() + tagH
+        Dim y = midTop + Math.Max(0F, (lineY - 0.4F - midTop - blockH) / 2)
         For i = 0 To lines.Count - 1
             g.DrawString(lines(i).Item1, fonts(i), Brushes.Black, rx, y, fmt)
             y += heights(i)
             fonts(i).Dispose()
         Next
+        If tags.Count > 0 Then
+            Dim tx = rx
+            Using pen As New Pen(Color.Black, 0.35F)
+                For Each tg In tags
+                    Dim tf = If(Regex.IsMatch(tg, "^[A-Za-z]+$"), New Font("Arial", 2.9F, FontStyle.Bold, GraphicsUnit.Millimeter), CType(tagFont.Clone(), Font))
+                    Dim tw = g.MeasureString(tg, tf, PointF.Empty, fmt).Width
+                    If tx + tw + 1.4F > w - L Then tf.Dispose() : Exit For
+                    Dim th = tagFont.GetHeight(g)
+                    g.DrawRectangle(pen, tx, y + 0.3F, tw + 1.4F, th + 0.4F)
+                    g.DrawString(tg, tf, Brushes.Black, tx + 0.7F, y + 0.5F, fmt)
+                    tx += tw + 1.4F + 0.8F
+                    tf.Dispose()
+                Next
+            End Using
+        End If
+        tagFont.Dispose()
 
-        ' --- 粗線 ---
-        Using pen As New Pen(Color.Black, 0.55F)
+        ' --- 分隔線 ---
+        Using pen As New Pen(Color.Black, 0.3F)
             g.DrawLine(pen, L, lineY, w - L, lineY)
         End Using
 
-        ' --- 領藥日：➊➋➌ + MM/DD（平均分配寬度） ---
+        ' --- 下：領藥日 ➊➋➌ + MM/DD（平均分配寬度） ---
         Dim fillsObj As Object = Nothing
         label.TryGetValue("fills", fillsObj)
         Dim fills = TryCast(fillsObj, System.Collections.IList)
         If fills Is Nothing OrElse fills.Count = 0 Then Return
         Dim marks = New String() {"", "➊", "➋", "➌"}
         Dim colW = innerW / fills.Count
-        Dim size = Math.Min(5.2F, (colW - 1.2F) / 3.8F)
-        Using fNum As New Font("Arial", size, FontStyle.Bold, GraphicsUnit.Millimeter),
-              fMark As New Font("Segoe UI Symbol", size * 1.05F, FontStyle.Regular, GraphicsUnit.Millimeter)
+        Dim size = If(fills.Count >= 3, 4.1F, If(fills.Count = 2, 5.3F, 6.0F))
+        Using fNum As New Font("Arial", size, FontStyle.Regular, GraphicsUnit.Millimeter),
+              fMark As New Font("Segoe UI Symbol", size * 0.75F, FontStyle.Regular, GraphicsUnit.Millimeter)
             For i = 0 To fills.Count - 1
                 Dim fl = TryCast(fills(i), Dictionary(Of String, Object))
                 Dim seq = CInt(Val(S(fl, "seq")))
@@ -567,20 +598,50 @@ Module RxBridge
                 Dim md = S(fl, "md")
                 Dim mw = g.MeasureString(mark, fMark, PointF.Empty, fmt).Width
                 Dim dw = g.MeasureString(md, fNum, PointF.Empty, fmt).Width
-                Dim px = L + colW * i + (colW - mw - 0.6F - dw) / 2
-                Dim ty = lineY + 0.6F + (fillsH - 0.6F - fNum.GetHeight(g)) / 2
-                g.DrawString(mark, fMark, Brushes.Black, px, ty - size * 0.02F, fmt)
-                g.DrawString(md, fNum, Brushes.Black, px + mw + 0.6F, ty, fmt)
+                Dim px = L + colW * i + (colW - mw - 0.5F - dw) / 2
+                Dim ty = lineY + 0.4F + (fillsH - 0.4F - fNum.GetHeight(g)) / 2
+                Dim my = ty + (fNum.GetHeight(g) - fMark.GetHeight(g)) / 2
+                g.DrawString(mark, fMark, Brushes.Black, px, my, fmt)
+                g.DrawString(md, fNum, Brushes.Black, px + mw + 0.5F, ty, fmt)
             Next
         End Using
     End Sub
+
+    ' 單色 Logo：實心圓＋圓環（與網站同一圖形，viewBox 40×40 等比縮放）
+    Private Sub DrawLogo(g As Graphics, x As Single, y As Single, size As Single)
+        Dim k = size / 40.0F
+        g.FillEllipse(Brushes.Black, x + (14.5F - 10.0F) * k, y + (24.0F - 10.0F) * k, 20.0F * k, 20.0F * k)
+        Dim r = 8.6F * k
+        Dim cx = x + 25.5F * k, cy = y + 15.5F * k
+        Using white As New Pen(Color.White, 8.0F * k), black As New Pen(Color.Black, 4.2F * k)
+            g.DrawEllipse(white, cx - r, cy - r, r * 2, r * 2)
+            g.DrawEllipse(black, cx - r, cy - r, r * 2, r * 2)
+        End Using
+    End Sub
+
+    ' 通知方式標籤：優先用 notify_methods 陣列；舊資料只有 notify 文字（例「LINE/簡訊通知」）時自行拆開
+    Private Function NotifyTags(label As Dictionary(Of String, Object)) As List(Of String)
+        Dim list As New List(Of String)
+        Dim o As Object = Nothing
+        If label.TryGetValue("notify_methods", o) AndAlso TypeOf o Is System.Collections.IList Then
+            For Each x In CType(o, System.Collections.IList)
+                If x IsNot Nothing AndAlso x.ToString().Trim() <> "" Then list.Add(x.ToString().Trim())
+            Next
+            If list.Count > 0 Then Return list
+        End If
+        Dim t = S(label, "notify").Trim()
+        If t = "" Then Return list
+        If t.EndsWith("通知") Then t = t.Substring(0, t.Length - 2)
+        list.AddRange(t.Split("/"c).Select(Function(x) x.Trim()).Where(Function(x) x <> ""))
+        Return list
+    End Function
 
     ' 測試列印（系統匣選單）
     Private Sub TestPrint()
         Try
             Dim label As New Dictionary(Of String, Object) From {
                 {"order_no", "26111400057"}, {"order_no_fmt", "261114-0005-7"}, {"patient_name", "測試病人"},
-                {"hospital", "台大"}, {"dept", "心臟血管內科"}, {"phone", "0912345678"}, {"notify", "LINE通知"},
+                {"hospital", "台大"}, {"dept", "心臟血管內科"}, {"phone", "0912345678"}, {"notify", "LINE通知"}, {"notify_methods", New ArrayList From {"LINE"}},
                 {"fills", New ArrayList From {
                     New Dictionary(Of String, Object) From {{"seq", 2}, {"md", "12/02"}},
                     New Dictionary(Of String, Object) From {{"seq", 3}, {"md", "12/30"}}}}}
