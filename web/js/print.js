@@ -64,7 +64,7 @@ function labelHtml(o, fills) {
   const dsz = fs.length >= 3 ? 4.1 : fs.length === 2 ? 5.3 : 6;
   const fl = fs.map(f => `<span><b>${SEQ_MARK[f.seq] || f.seq}</b>${mdOf(f.due_date)}</span>`).join('');
   return `<div class="lb">
-    <div class="hd">${LOGO_MONO}<span class="cp">藥局聯</span><div class="nm" style="font-size:${fit(o.patient_name, 20.8, 5.6)}mm">${esc(o.patient_name)}</div></div>
+    <div class="hd"><div class="hl">${LOGO_MONO}<span class="cp">藥局聯</span></div><div class="nm" style="font-size:${fit(o.patient_name, 20.8, 5.6)}mm">${esc(o.patient_name)}</div></div>
     <div class="mid">
       <div class="qrw"><div class="qr">${qrSvg(o.order_no)}</div><div class="no">${esc(fmtNo(o.order_no))}</div></div>
       <div class="info">${info}<div class="tgs">${tags || '&nbsp;'}</div></div>
@@ -169,20 +169,21 @@ const CSS = {
     html,body{margin:0;padding:0;font-family:${FONT};color:#000}
     .lb{width:40mm;height:30mm;padding:1mm 1.5mm .6mm;display:flex;flex-direction:column;break-after:page;page-break-after:always;overflow:hidden}
     .lb:last-child{break-after:auto;page-break-after:auto}
-    .hd{display:flex;align-items:center;gap:1.1mm;height:6.6mm;flex:none}
-    .hd .lg{width:5.6mm;height:5.6mm;flex:none}
-    .hd .cp{flex:none;background:#000;color:#fff;font-size:2.4mm;font-weight:700;padding:.5mm .8mm;border-radius:.6mm;line-height:1.1}
+    .hd{display:flex;align-items:center;gap:1.6mm;height:6.6mm;flex:none}
+    .hd .hl{flex:none;width:13mm;margin-right:.4mm;display:flex;align-items:center;justify-content:space-between}
+    .hd .lg{width:5.4mm;height:5.4mm;flex:none}
+    .hd .cp{flex:none;background:#000;color:#fff;font-size:2.3mm;font-weight:700;padding:.5mm .6mm;border-radius:.6mm;line-height:1.1}
     .hd .nm{flex:1;min-width:0;font-weight:900;white-space:nowrap;overflow:hidden;line-height:1}
-    .mid{display:flex;gap:1.6mm;align-items:center;flex:1;min-height:0}
+    .mid{display:flex;gap:1.6mm;align-items:center;flex:1;min-height:0;padding-bottom:.6mm}
     .qrw{flex:none;width:13.4mm;text-align:center}
     .qr{width:12.6mm;height:12.6mm;margin:0 auto}.qr svg{width:100%;height:100%;display:block}
     .no{font-size:1.95mm;font-family:Arial,sans-serif;margin-top:.3mm;white-space:nowrap;letter-spacing:-.03mm}
-    .info{min-width:0;flex:1;line-height:1.18;font-weight:400}
+    .info{min-width:0;flex:1;line-height:1.14;font-weight:400}
     .info>div{white-space:nowrap;overflow:hidden}
     .info .p{font-family:Arial,sans-serif;letter-spacing:-.02mm}
-    .info>.tgs{display:flex;gap:.8mm;margin-top:.5mm;height:4.2mm;align-items:center;overflow:visible;padding-left:.2mm}
-    .tg{border:.3mm solid #000;border-radius:.6mm;padding:0 .8mm;font-size:2.8mm;font-weight:700;font-family:Arial,${FONT};line-height:1.3}
-    .fl{border-top:.3mm solid #000;padding-top:.3mm;font-family:Arial,${FONT};font-weight:500;
+    .info>.tgs{display:flex;gap:.8mm;margin-top:.3mm;height:4mm;align-items:center;overflow:visible;padding-left:.2mm}
+    .tg{border:.3mm solid #000;border-radius:.6mm;padding:0 .8mm;font-size:2.6mm;font-weight:700;font-family:Arial,${FONT};line-height:1.2}
+    .fl{border-top:.3mm solid #000;padding-top:.3mm;font-family:Arial,${FONT};font-weight:700;
       display:flex;justify-content:space-around;white-space:nowrap;line-height:1.05}
     .fl span{display:flex;align-items:center}
     .fl b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;

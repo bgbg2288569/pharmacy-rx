@@ -412,8 +412,10 @@ export const OrderForm = {
     // 藥局系統（調劑系統）帶入的客戶備註（sa110.allergy），只顯示參考，不存進寄單
     const extMemo = ref('');
     const extPhones = ref([]);          // 藥局系統的電話 1／電話 2，可點選切換
+    let origHosp = null;                 // 修改時原本的醫院（匯入的舊寄單沒改醫院就不檢查清單）
     function load(o) {
       Object.assign(f, emptyForm());
+      origHosp = o ? [o.hospital_code || '', (o.hospital_name || '').trim()] : null;
       extMemo.value = ''; extPhones.value = [];
       if (!o) return;
       Object.assign(f, {
@@ -645,7 +647,8 @@ export const OrderForm = {
       if (f.phone && f.phone.length < 8) errs.phone = '電話位數不足';
       if (/^09/.test(f.phone || '') && f.phone.length !== 10) errs.phone = '手機（09 開頭）須為 10 碼';
       if (f.birth_date && f.birth_date > todayISO()) errs.birth = '生日不能晚於今天';
-      if (!f.hospital_code) errs.hosp = f.hospital_name ? `「${f.hospital_name}」不在醫院清單內，請從清單選擇醫院` : '請選擇醫院（輸入快速碼、院所代號或名稱後從清單點選）';
+      const hospSame = origHosp && origHosp[0] === (f.hospital_code || '') && origHosp[1] === (f.hospital_name || '').trim();
+      if (!f.hospital_code && !hospSame) errs.hosp = f.hospital_name ? `「${f.hospital_name}」不在醫院清單內，請從清單選擇醫院` : '請選擇醫院（輸入快速碼、院所代號或名稱後從清單點選）';
       if (!f.dates.some(Boolean)) errs.dates = '請至少輸入一次領藥日期';
       const d = f.dates.filter(Boolean);
       for (let i = 1; i < d.length; i++) if (d[i] < d[i - 1]) errs.dates = '後一次的日期早於前一次，請確認';
