@@ -100,7 +100,7 @@ export const RocDate = {
     const LEAD = 9;
     const baseOf = () => {
       for (let k = props.seq - 1; k >= 1; k--) { const d = props.dates?.[k - 1]; if (d) return { k, d }; }
-      return null;
+      return { k: 1, d: todayISO(), today: true };     // 前面都沒填：以今天當第一次（今天調劑）來算
     };
     const base = computed(() => baseOf());
     const plus = n => {
@@ -135,9 +135,9 @@ export const RocDate = {
       <button type="button" class="cal" tabindex="-1" title="民國年日曆" :disabled="disabled" @click="openPicker">📅</button>
     </div>
     <RocCalendar v-if="calOpen" :model-value="modelValue" :birth="birth" :up="calUp" @pick="fromCal" @close="calOpen=false" />
-    <div class="plus" v-if="seq > 1 && !disabled && !compact"><span class="tiny muted">{{ modelValue ? rel : (base ? '依第' + base.k + '次・處方天數' : '先填前一次') }}</span>
-      <button type="button" tabindex="-1" v-for="n in [28, 29, 30]" :key="n" :disabled="!base"
-        :title="!base ? '請先填前一次領藥日' : base.k === 1 ? '第一次 + ' + n + ' 天 × ' + (seq - 1) + ' − 9 天' : '第' + base.k + '次 + ' + n * (seq - base.k) + ' 天'" @click="plus(n)">{{n}}天</button>
+    <div class="plus" v-if="seq > 1 && !disabled && !compact"><span class="tiny muted">{{ modelValue ? rel : (base.today ? '依今天・處方天數' : '依第' + base.k + '次・處方天數') }}</span>
+      <button type="button" tabindex="-1" v-for="n in [28, 29, 30]" :key="n"
+        :title="base.k === 1 ? (base.today ? '今天' : '第一次') + ' + ' + n + ' 天 × ' + (seq - 1) + ' − 9 天' : '第' + base.k + '次 + ' + n * (seq - base.k) + ' 天'" @click="plus(n)">{{n}}天</button>
     </div>
     <div class="tiny muted" v-else-if="rel">{{rel}}</div>
   </div>`,
@@ -674,6 +674,20 @@ export const OrderForm = {
       if (recentlyScanned()) { toast('偵測到掃描輸入，已略過這次儲存／列印', 'err', 3000); return; }
       if (saving.value || !validate()) return;
       if (edit.value && snap() === orig) { toast('沒有修改', 'info', 1400); emit('cancel'); return; }
+      // 領藥日早於今天 → 提醒（調劑日期原則上不能回溯，除非是補打寄單）
+      const today = todayISO();
+      const past = f.dates.map((d, i) => ({ seq: i + 1, d })).filter(x => x.d && x.d < today)
+        .filter(x => !edit.value || !fillOf(x.seq) || fillOf(x.seq).due_date !== x.d);
+      if (past.length) {
+        const ok = await askConfirm({
+          title: '⚠ 領藥日早於今天',
+          msg: `${past.map(x => `第${x.seq}次領藥 ${fullOf(x.d)}`).join('、')}，早於今天日期 ${fullOf(today)}。`,
+          strong: '請勿歸入寄單資料夾！打單時需以今天的日期調劑。',
+          after: '若非補打寄單，請將領藥日改為今天日期。',
+          okText: '是補打寄單，繼續儲存', cancelText: '返回修改',
+        });
+        if (!ok) return;
+      }
       // 領藥日早於或等於「最新預作日」→ 提醒直接打單調劑
       let lastPrep = '';
       try { lastPrep = (await q(sb.from('rx_stores').select('settings').eq('id', state.storeId).single())).settings?.last_prep_date || ''; } catch { /* ignore */ }
@@ -1141,6 +1155,7 @@ export const ConfirmModal = {
       <h3>{{state.confirm.title}}</h3>
       <p v-if="state.confirm.msg">{{state.confirm.msg}}</p>
       <p v-if="state.confirm.strong" class="strong">{{state.confirm.strong}}</p>
+      <p v-if="state.confirm.after">{{state.confirm.after}}</p>
       <div class="btns" style="justify-content:flex-end;margin-top:16px">
         <button class="btn ghost" @click="done(false)">{{state.confirm.cancelText}}</button>
         <button ref="okBtn" class="btn" :class="state.confirm.danger ? 'danger-fill' : 'fill'" @click="done(true)">{{state.confirm.okText}}</button>
