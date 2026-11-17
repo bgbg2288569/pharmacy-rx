@@ -158,7 +158,7 @@ Module RxBridge
 
             Select Case req.Url.AbsolutePath.TrimEnd("/"c).ToLowerInvariant()
                 Case "/health"
-                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.7.0"})
+                    Reply(res, 200, New With {.ok = True, .name = Cfg("Name"), .version = "1.7.1"})
                 Case "/patients"
                     ' 注意：不能用 req.QueryString —— .NET Framework 會用系統預設編碼（Big5）解碼網址，
                     ' 中文會變亂碼，送進 ODBC 後變成一串 ?，反而查到一堆含 ? 的姓名。這裡自己用 UTF-8 解碼。
@@ -484,7 +484,7 @@ Module RxBridge
     End Function
 
     ' 貼紙 40×30mm（與寄單網站貼紙同版面）：
-    '   上：姓名（大）＋右上 Logo
+    '   上：Logo＋「藥局聯」黑底標籤＋姓名
     '   中：左 QR＋寄單編號；右 醫院／科別／電話／通知方式外框標籤
     '   下：細線＋領藥日 ➊➋➌ MM/DD
     Private Sub DrawLabel(g As Graphics, label As Dictionary(Of String, Object), w As Single, h As Single)
@@ -501,20 +501,30 @@ Module RxBridge
         If lineSp < 0.6F OrElse lineSp > 1.5F Then lineSp = 0.95F
 
         Const L As Single = 1.6F, T As Single = 1.0F
-        Const LOGO As Single = 5.2F, HEADH As Single = 6.0F
+        Const LOGO As Single = 5.6F, HEADH As Single = 6.6F
         Dim innerW = w - L * 2
         Dim fillsH = 6.2F                                ' 下方領藥日區高度
         Dim lineY = h - 0.8F - fillsH                    ' 分隔線位置
         Dim midTop = T + HEADH + 0.2F
-        Dim qrSize = Math.Min(13.0F, lineY - midTop - 2.6F)
+        Dim qrSize = Math.Min(12.6F, lineY - midTop - 2.6F)
 
-        ' --- 上：姓名＋Logo ---
-        Dim nameW = innerW - LOGO - 1.0F
-        Using f = FitFont(g, S(label, "patient_name"), cjk, FontStyle.Bold, 5.4F, nameW)
-            Dim nh = f.GetHeight(g)
-            g.DrawString(S(label, "patient_name"), f, Brushes.Black, L, T + (HEADH - nh) / 2, fmt)
+        ' --- 上：Logo＋「藥局聯」＋姓名 ---
+        DrawLogo(g, L, T + (HEADH - LOGO) / 2, LOGO)
+        Dim hx = L + LOGO + 1.1F
+        Using fc As New Font(cjk, 2.4F, FontStyle.Bold, GraphicsUnit.Millimeter)
+            Dim cs = g.MeasureString("藥局聯", fc, PointF.Empty, fmt)
+            Dim bw = cs.Width + 1.6F, bh = fc.GetHeight(g) + 0.8F
+            Dim by = T + (HEADH - bh) / 2
+            Using path = RoundRect(hx, by, bw, bh, 0.6F)
+                g.FillPath(Brushes.Black, path)
+            End Using
+            g.DrawString("藥局聯", fc, Brushes.White, hx + 0.8F, by + 0.4F, fmt)
+            hx += bw + 1.1F
         End Using
-        DrawLogo(g, w - L - LOGO, T + (HEADH - LOGO) / 2, LOGO)
+        Using f = FitFont(g, S(label, "patient_name"), cjk, FontStyle.Bold, 5.6F, w - L - hx)
+            Dim nh = f.GetHeight(g)
+            g.DrawString(S(label, "patient_name"), f, Brushes.Black, hx, T + (HEADH - nh) / 2, fmt)
+        End Using
 
         ' --- 中左：QR ＋ 寄單編號 ---
         Dim orderNo = S(label, "order_no")
@@ -542,20 +552,21 @@ Module RxBridge
         ' --- 中右：醫院／科別／電話＋通知標籤 ---
         Dim rx = L + 14.0F + 1.4F
         Dim rw = w - L - rx
+        ' 醫院／科別／電話固定三行：沒有資料時留空白，行高不變
         Dim lines As New List(Of Tuple(Of String, String, Single))
         For Each k In {"hospital", "dept", "phone"}
-            Dim txt = S(label, k)
-            If txt <> "" Then lines.Add(Tuple.Create(txt, If(k = "phone", "Arial", cjk), If(k = "phone", 4.2F, 3.4F)))
+            lines.Add(Tuple.Create(S(label, k), If(k = "phone", "Arial", cjk), If(k = "phone", 3.7F, 3.2F)))
         Next
-        Dim fonts = lines.Select(Function(ln) FitFont(g, ln.Item1, ln.Item2, FontStyle.Bold, ln.Item3, rw)).ToList()
+        Dim fonts = lines.Select(Function(ln) If(ln.Item1 = "", New Font(ln.Item2, ln.Item3, FontStyle.Regular, GraphicsUnit.Millimeter),
+                                                  FitFont(g, ln.Item1, ln.Item2, FontStyle.Regular, ln.Item3, rw))).ToList()
         Dim heights = fonts.Select(Function(ft) ft.GetHeight(g) * lineSp).ToList()
         Dim tags = NotifyTags(label)
-        Dim tagFont As New Font(cjk, 2.9F, FontStyle.Bold, GraphicsUnit.Millimeter)
-        Dim tagH = If(tags.Count > 0, tagFont.GetHeight(g) + 0.9F, 0F)
+        Dim tagFont As New Font(cjk, 2.8F, FontStyle.Bold, GraphicsUnit.Millimeter)
+        Dim tagH = tagFont.GetHeight(g) + 0.9F            ' 沒有通知方式也保留這一行
         Dim blockH = heights.Sum() + tagH
         Dim y = midTop + Math.Max(0F, (lineY - 0.4F - midTop - blockH) / 2)
         For i = 0 To lines.Count - 1
-            g.DrawString(lines(i).Item1, fonts(i), Brushes.Black, rx, y, fmt)
+            If lines(i).Item1 <> "" Then g.DrawString(lines(i).Item1, fonts(i), Brushes.Black, rx, y, fmt)
             y += heights(i)
             fonts(i).Dispose()
         Next
@@ -563,7 +574,7 @@ Module RxBridge
             Dim tx = rx
             Using pen As New Pen(Color.Black, 0.35F)
                 For Each tg In tags
-                    Dim tf = If(Regex.IsMatch(tg, "^[A-Za-z]+$"), New Font("Arial", 2.9F, FontStyle.Bold, GraphicsUnit.Millimeter), CType(tagFont.Clone(), Font))
+                    Dim tf = If(Regex.IsMatch(tg, "^[A-Za-z]+$"), New Font("Arial", 2.8F, FontStyle.Bold, GraphicsUnit.Millimeter), CType(tagFont.Clone(), Font))
                     Dim tw = g.MeasureString(tg, tf, PointF.Empty, fmt).Width
                     If tx + tw + 1.4F > w - L Then tf.Dispose() : Exit For
                     Dim th = tagFont.GetHeight(g)
@@ -606,6 +617,16 @@ Module RxBridge
             Next
         End Using
     End Sub
+
+    ' 圓角矩形
+    Private Function RoundRect(x As Single, y As Single, w As Single, h As Single, r As Single) As GraphicsPath
+        Dim gp As New GraphicsPath()
+        Dim d = r * 2
+        gp.AddArc(x, y, d, d, 180, 90) : gp.AddArc(x + w - d, y, d, d, 270, 90)
+        gp.AddArc(x + w - d, y + h - d, d, d, 0, 90) : gp.AddArc(x, y + h - d, d, d, 90, 90)
+        gp.CloseFigure()
+        Return gp
+    End Function
 
     ' 單色 Logo：實心圓＋圓環（與網站同一圖形，viewBox 40×40 等比縮放）
     Private Sub DrawLogo(g As Graphics, x As Single, y As Single, size As Single)

@@ -53,20 +53,21 @@ const notifyTags = m => (m || []).map(x => `<span class="tg">${esc(x)}</span>`).
 function labelHtml(o, fills) {
   const fs = fillsActive(fills);
   const RW = 19;                                        // 右側文字欄寬度
+  // 醫院／科別／電話固定三行：沒有資料時留空白，行高不變
   const info = [
-    ['h', shortHosp(o.hospital_code, o.hospital_name), 3.4],
-    ['d', o.dept_name, 3.4],
-    ['p', o.phone, 4.2],
-  ].filter(x => x[1]).map(([k, t, mx]) => `<div class="${k}" style="font-size:${fit(t, RW, mx)}mm">${esc(t)}</div>`).join('');
+    ['h', shortHosp(o.hospital_code, o.hospital_name), 3.2],
+    ['d', o.dept_name, 3.2],
+    ['p', o.phone, 3.7],
+  ].map(([k, t, mx]) => `<div class="${k}" style="font-size:${t ? fit(t, RW, mx) : mx}mm">${t ? esc(t) : '&nbsp;'}</div>`).join('');
   const tags = notifyTags(o.notify_methods);
   // 領藥日：只印月/日，序號用 ➊➋➌；一次排一列，次數越少字越大
   const dsz = fs.length >= 3 ? 4.1 : fs.length === 2 ? 5.3 : 6;
   const fl = fs.map(f => `<span><b>${SEQ_MARK[f.seq] || f.seq}</b>${mdOf(f.due_date)}</span>`).join('');
   return `<div class="lb">
-    <div class="hd"><div class="nm" style="font-size:${fit(o.patient_name, 30, 5.4)}mm">${esc(o.patient_name)}</div>${LOGO_MONO}</div>
+    <div class="hd">${LOGO_MONO}<span class="cp">藥局聯</span><div class="nm" style="font-size:${fit(o.patient_name, 20.8, 5.6)}mm">${esc(o.patient_name)}</div></div>
     <div class="mid">
       <div class="qrw"><div class="qr">${qrSvg(o.order_no)}</div><div class="no">${esc(fmtNo(o.order_no))}</div></div>
-      <div class="info">${info}${tags ? `<div class="tgs">${tags}</div>` : ''}</div>
+      <div class="info">${info}<div class="tgs">${tags || '&nbsp;'}</div></div>
     </div>
     <div class="fl" style="font-size:${dsz}mm">${fl}</div>
   </div>`;
@@ -85,7 +86,7 @@ function slipParts(o) {
       <div class="no">${esc(fmtNo(o.order_no))}</div>
       <div>${esc(shortHosp(o.hospital_code, o.hospital_name) || o.hospital_name || '')}</div>
       <div>${esc(o.dept_name || '')}</div></div></div>`;
-  const contact = `<div class="ct">${notifyTags(o.notify_methods)}<span class="ph">${esc(o.phone || '')}</span></div>`;
+  const contact = `<div class="ct">${notifyTags(o.notify_methods)}<span class="ph">${o.phone ? esc(o.phone) : '&nbsp;'}</span></div>`;
   const meta = `<div class="meta"><span>${rocDT(o.created_at)}</span>${o.created_staff_code ? `<span>輸入人員：${esc(o.created_staff_code)}</span>` : ''}</div>`;
   const msg = `<div class="msg">藥品準備完成後會通知您。<br>請於接到通知後10天內，攜帶<br>「健保卡」來藥局領藥！</div>
     <div class="tips"><div>☀ 建議收到通知後，再來藥局領藥。</div><div>☀ 領藥時出示本單據可加快現場作業。</div></div>`;
@@ -147,7 +148,7 @@ const SLIP = `
     .it{min-width:0;font-size:var(--f3);line-height:1.45;font-weight:500}
     .it .no{font-family:Arial,sans-serif;font-weight:700}
     hr{border:0;border-top:var(--b1) solid #000;margin:calc(var(--g) * 1.2) 0}
-    .ct{display:flex;align-items:center;gap:calc(var(--g) * 1.2);flex-wrap:wrap}
+    .ct{display:flex;align-items:center;gap:calc(var(--g) * 1.2);flex-wrap:wrap;min-height:calc(var(--f2) * 1.6)}
     .tg{border:var(--b1) solid #000;border-radius:.2em;padding:0 .3em;font-size:var(--f2);font-weight:700;font-family:Arial,${FONT};line-height:1.3}
     .ph{font-size:var(--f2);font-weight:700;font-family:Arial,sans-serif}
     .lbl{font-size:var(--f3);font-weight:900}
@@ -159,30 +160,33 @@ const SLIP = `
     .msg{margin-top:calc(var(--g) * 1.2);background:#000;color:#fff;text-align:center;font-size:var(--fm);white-space:nowrap;font-weight:900;line-height:1.45;padding:.5em .4em;border-radius:.35em}
     .tips{margin-top:var(--g);font-size:var(--ft);font-weight:500;line-height:1.7;white-space:nowrap}
     .ft{margin-top:calc(var(--g) * .6);font-size:var(--f4);font-weight:700}
+    .pg:last-child{break-after:auto;page-break-after:auto}
     .meta{display:flex;align-items:baseline;gap:1.2em;font-size:var(--f4);font-family:Arial,${FONT}}`;
 
 const CSS = {
   label: `@page{size:40mm 30mm;margin:0}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000}
-    .lb{width:40mm;height:30mm;padding:1mm 1.6mm .8mm;display:flex;flex-direction:column;page-break-after:always;overflow:hidden}
-    .hd{display:flex;align-items:center;gap:1mm;height:6mm;flex:none}
+    .lb{width:40mm;height:30mm;padding:1mm 1.5mm .6mm;display:flex;flex-direction:column;break-after:page;page-break-after:always;overflow:hidden}
+    .lb:last-child{break-after:auto;page-break-after:auto}
+    .hd{display:flex;align-items:center;gap:1.1mm;height:6.6mm;flex:none}
+    .hd .lg{width:5.6mm;height:5.6mm;flex:none}
+    .hd .cp{flex:none;background:#000;color:#fff;font-size:2.4mm;font-weight:700;padding:.5mm .8mm;border-radius:.6mm;line-height:1.1}
     .hd .nm{flex:1;min-width:0;font-weight:900;white-space:nowrap;overflow:hidden;line-height:1}
-    .hd .lg{width:5.2mm;height:5.2mm;flex:none}
-    .mid{display:flex;gap:1.4mm;align-items:center;flex:1;min-height:0}
-    .qrw{flex:none;width:14mm;text-align:center}
-    .qr{width:13mm;height:13mm;margin:0 auto}.qr svg{width:100%;height:100%;display:block}
-    .no{font-size:2.05mm;font-family:Arial,sans-serif;margin-top:.3mm;white-space:nowrap;letter-spacing:-.03mm}
-    .info{min-width:0;flex:1;line-height:1.18;font-weight:700}
+    .mid{display:flex;gap:1.6mm;align-items:center;flex:1;min-height:0}
+    .qrw{flex:none;width:13.4mm;text-align:center}
+    .qr{width:12.6mm;height:12.6mm;margin:0 auto}.qr svg{width:100%;height:100%;display:block}
+    .no{font-size:1.95mm;font-family:Arial,sans-serif;margin-top:.3mm;white-space:nowrap;letter-spacing:-.03mm}
+    .info{min-width:0;flex:1;line-height:1.18;font-weight:400}
     .info>div{white-space:nowrap;overflow:hidden}
-    .info .p{font-family:Arial,sans-serif;font-weight:700;letter-spacing:-.03mm}
-    .tgs{display:flex;gap:.8mm;margin-top:.5mm}
-    .tg{border:.35mm solid #000;border-radius:.6mm;padding:0 .7mm;font-size:2.9mm;font-weight:700;font-family:Arial,${FONT};line-height:1.25}
-    .fl{border-top:.3mm solid #000;padding-top:.4mm;font-family:Arial,${FONT};font-weight:500;
+    .info .p{font-family:Arial,sans-serif;letter-spacing:-.02mm}
+    .info>.tgs{display:flex;gap:.8mm;margin-top:.5mm;height:4.2mm;align-items:center;overflow:visible;padding-left:.2mm}
+    .tg{border:.3mm solid #000;border-radius:.6mm;padding:0 .8mm;font-size:2.8mm;font-weight:700;font-family:Arial,${FONT};line-height:1.3}
+    .fl{border-top:.3mm solid #000;padding-top:.3mm;font-family:Arial,${FONT};font-weight:500;
       display:flex;justify-content:space-around;white-space:nowrap;line-height:1.05}
     .fl span{display:flex;align-items:center}
     .fl b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;
-      font-size:.75em;line-height:1;margin-right:.18em}`,
+      font-size:.72em;line-height:1;margin-right:.2em}`,
   // 57mm 發票紙（可印寬度約 48mm）；只用純黑，不用灰色
   receipt: `@page{margin:0}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
@@ -190,11 +194,11 @@ const CSS = {
     .pg{--f1:17pt;--f2:12.5pt;--f3:10.5pt;--f4:8.5pt;--fd:20pt;--fm:9.3pt;--ft:7.6pt;--g:1.6mm;--b1:.3mm;--b2:.6mm;--lg:7.5mm;--qr:14mm;
       width:48mm;margin:0 auto;padding:2mm 0 6mm;break-after:page;page-break-after:always}${SLIP}`,
   // A5：同一風格放大
-  a5: `@page{size:A5;margin:12mm}
+  a5: `@page{size:A5;margin:9mm 10mm}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000;background:#fff}
-    .pg{--f1:30pt;--f2:18pt;--f3:14pt;--f4:11pt;--fd:30pt;--fm:16pt;--ft:12pt;--g:3.5mm;--b1:.4mm;--b2:.9mm;--lg:14mm;--qr:30mm;
-      break-after:page;page-break-after:always}${SLIP}`,
+    .pg{--f1:24pt;--f2:15pt;--f3:12.5pt;--f4:10pt;--fd:24pt;--fm:13.5pt;--ft:10.5pt;--g:2.6mm;--b1:.4mm;--b2:.8mm;--lg:11mm;--qr:26mm;
+      height:191mm;overflow:hidden;break-after:page;page-break-after:always}${SLIP}`,
 };
 
 /** 列印寄單（mode 省略則用本機設定） */
