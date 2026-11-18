@@ -17,6 +17,7 @@ export default {
     const famRows = ref([]);          // 同行家人的所有未完成次數（含寄放中），用來判斷全家是否備妥
     const sel = ref(new Set());
     const busy = ref(false);
+    const prog = ref('');            // 批次處理進度（例：3/10）
     const kw = ref('');
 
     async function load() {
@@ -79,24 +80,48 @@ export default {
       const op = await ensureOperator(); if (!op || !list.length) return;
       busy.value = true;
       let ok = 0;
+      const s = new Set(sel.value);
+      let n = 0;
       for (const r of list) {
-        try { await rpc('rx_fill_action', { p_fill_id: r.fill_id, p_action: action, p_staff: op.code, p_extra: action === 'notify' ? { via: viaOf(r) } : {} }); ok++; }
-        catch (e) { toast(`${r.patient_name}：${e.message}`, 'err', 4000); }
+        prog.value = list.length > 1 ? `${++n}/${list.length}` : '';
+        const via = viaOf(r);
+        try {
+          await rpc('rx_fill_action', { p_fill_id: r.fill_id, p_action: action, p_staff: op.code, p_extra: action === 'notify' ? { via } : {} });
+          ok++;
+          // 畫面立即更新（不用等重新載入）：該筆移到「已通知」或移回「待通知」
+          const x = rows.value.find(y => y.fill_id === r.fill_id);
+          if (x) {
+            if (action === 'notify') Object.assign(x, { fill_status: 'notified', notified_at: new Date().toISOString(), notified_by: op.name || op.code, notified_via: via });
+            else Object.assign(x, { fill_status: 'prepared', notified_at: null, notified_by: null, notified_via: null });
+          }
+          s.delete(r.fill_id);
+        } catch (e) { toast(`${r.patient_name}：${e.message}`, 'err', 4000); }
       }
-      busy.value = false;
+      sel.value = s;
+      busy.value = false; prog.value = '';
       toast(`${action === 'notify' ? '已通知' : '已撤銷'} ${ok} 筆`, 'ok');
-      bump();
+      bump();               // 背景重新載入（更新上方待通知數字等）
     }
     function notifyRow(r) {
       const mates = lists.value.notify.filter(x => r.family_no && x.family_no === r.family_no && x.order_id !== r.order_id);
       if (mates.length && confirm(`同行家人 ${mates.map(x => x.patient_name).join('、')} 也一起標記已通知？`)) return act([r, ...mates], 'notify');
       return act([r], 'notify');
     }
-    const batch = action => act(shown.value.filter(r => sel.value.has(r.fill_id)), action);
+    // 批次：有勾選就處理勾選的；沒勾選就詢問是否處理目前清單全部（依目前的通知方式、搜尋條件）
+    function batch(action) {
+      let list = shown.value.filter(r => sel.value.has(r.fill_id));
+      const word = action === 'notify' ? '標記已通知' : '撤銷通知';
+      if (!list.length) {
+        list = shown.value;
+        if (!list.length) return toast('清單沒有資料', 'warn');
+        if (!confirm(`沒有勾選任何一筆。\n要把目前清單的 ${list.length} 筆全部${word}嗎？`)) return;
+      } else if (list.length > 1 && !confirm(`${word} ${list.length} 筆？`)) return;
+      return act(list, action);
+    }
     async function switchOp() { const s = await askStaff('切換操作人員'); if (s) setOperator(s); }
     const open = id => { state.detailId = id; };
     const today = t;
-    return { today, state, tab, method, kw, rows, lists, shown, sel, allSel, busy, toggleAll, toggleOne, act, notifyRow, batch, switchOp, msgOf, copyText,
+    return { prog, today, state, tab, method, kw, rows, lists, shown, sel, allSel, busy, toggleAll, toggleOne, act, notifyRow, batch, switchOp, msgOf, copyText,
       open, familyOf, famReady, NOTIFY, CIRCLED, FILL_STATUS, rocOf, weekOf, fmtNo, dtOf, fullOf, shortHosp };
   },
   template: `<div class="wrap wide">
@@ -119,9 +144,9 @@ export default {
         </div>
         <span style="flex:1"></span>
         <div class="searchbox"><input class="inp" v-model="kw" placeholder="🔍 姓名／電話／醫院／科別"></div>
-        <span class="small muted" v-if="sel.size">已選 {{sel.size}} 筆</span>
-        <button class="btn sm fill" v-if="tab==='notify'" :disabled="!sel.size || busy" @click="batch('notify')">批次標記已通知</button>
-        <button class="btn sm" v-if="tab==='done'" :disabled="!sel.size || busy" @click="batch('unnotify')">批次撤銷通知</button>
+        <span class="small muted" v-if="!sel.size && tab!=='self' && shown.length">勾選左邊方框可批次處理</span>
+        <button class="btn sm fill" v-if="tab==='notify'" :disabled="busy || !shown.length" @click="batch('notify')" :title="sel.size ? '' : '沒有勾選時，會詢問是否處理清單全部'">{{ prog ? '處理中 ' + prog + '…' : sel.size ? '批次標記已通知（' + sel.size + '）' : '批次標記已通知' }}</button>
+        <button class="btn sm" v-if="tab==='done'" :disabled="busy || !shown.length" @click="batch('unnotify')">{{ prog ? '處理中 ' + prog + '…' : sel.size ? '批次撤銷通知（' + sel.size + '）' : '批次撤銷通知' }}</button>
       </div>
       <p class="small muted" v-if="tab==='notify'" style="margin:0 0 8px">列出領藥日為今天（{{rocOf(today)}}）及之前、已預作完成的處方。
         <template v-if="lists.later.length">另有 <b>{{lists.later.length}}</b> 筆已預作、領藥日還沒到，到領藥日當天才會出現在這裡。</template></p>
