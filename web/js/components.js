@@ -552,8 +552,8 @@ export const OrderForm = {
       }
       suggOpen.value = false; qrMode.value = false;
       checkOpen();
-      nextTick(() => {   // 帶入後跳到第一個需要填的欄位
-        const sel = [f.notify_methods.length ? null : '[data-k=notify] button', f.hospital_name ? null : '[data-k=hosp] input', '[data-k=d2] input.t'].find(Boolean);
+      nextTick(() => {   // 帶入後依「醫院 › 科別 › 第二次領藥日」跳到第一個空白的欄位
+        const sel = [f.hospital_code && f.hospital_name ? null : '[data-k=hosp] input', f.dept_name ? null : '[data-k=dept] input', '[data-k=d2] input.t'].find(Boolean);
         root.value?.querySelector(sel)?.focus();
       });
     }
@@ -1002,7 +1002,9 @@ export const OrderDetail = {
       ((o.value.ext_patient_id && r.ext_patient_id === o.value.ext_patient_id) || birthMatch(o.value.birth_date, r.birth_date));
     async function findLink() {
       const w = cleanQ(linkQ.value);
-      const base = () => sb.from('rx_orders').select('*, fills:rx_fills(*)').eq('store_id', o.value.store_id).neq('status', 'cancelled').neq('id', o.value.id);
+      // 只找最近 3 個月內建立的寄單，避免全表搜尋太慢
+      const since = addDays(todayISO(), -92) + 'T00:00:00+08:00';
+      const base = () => sb.from('rx_orders').select('*, fills:rx_fills(*)').eq('store_id', o.value.store_id).neq('status', 'cancelled').neq('id', o.value.id).gte('created_at', since);
       try {
         let rows;
         if (w) rows = await q(base().or(`patient_name.ilike.%${w}%,phone.like.${w}%,order_no.like.${w.replace(/-/g, '')}%`).order('created_at', { ascending: false }).limit(20));
@@ -1109,7 +1111,7 @@ export const OrderDetail = {
           </div>
           <div class="small muted" v-if="!fam.length && !linking">尚未連結，家人或同一人同時寄單，可進行同行家人連結，預作完成後一起通知。</div>
           <div v-if="linking" class="linkbox">
-            <div class="inline"><input class="inp" v-model="linkQ" @input="findLinkD" placeholder="搜尋姓名／電話／寄單編號（預設列出同一人其他寄單與同電話）">
+            <div class="inline"><input class="inp" v-model="linkQ" @input="findLinkD" placeholder="搜尋姓名／電話／寄單編號（3 個月內；預設列出同一人其他寄單與同電話）">
               <button class="x" @click="linking=false">取消</button></div>
             <div class="fam pick" v-for="r in linkRows" :key="r.id" @click="linkTo(r)">
               <b>{{r.patient_name}}</b><span class="pill regular" v-if="r._same">同一人</span><span class="num small muted">{{r.phone}}</span>

@@ -10,6 +10,9 @@ export const PRINT_MODES = [
 ];
 export const getPrintMode = () => { const m = ls.get('print_mode', 'label'); return PRINT_MODES.some(x => x.id === m) ? m : 'label'; };
 export const setPrintMode = m => ls.set('print_mode', m);
+// 貼紙是否交給 RxBridge 直接列印：每台電腦各自設定，預設關閉（用瀏覽器列印）
+export const getLabelBridge = () => ls.get('label_bridge', false) === true;
+export const setLabelBridge = v => ls.set('label_bridge', !!v);
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -52,7 +55,7 @@ const LOGO_MONO = `<svg viewBox="0 0 40 40" class="lg" aria-hidden="true"><circl
 const notifyTags = m => (m || []).map(x => `<span class="tg">${esc(x)}</span>`).join('');
 function labelHtml(o, fills) {
   const fs = fillsActive(fills);
-  const RW = 19;                                        // 右側文字欄寬度
+  const RW = 18.2;                                      // 右側文字欄寬度（右邊多留 1.3mm，避免標籤機把最右邊切掉）
   // 右側固定四列（高度固定，不受字型行高影響）：醫院、科別、通知方式、電話；沒有資料的列留白
   const row = (k, t, mx) => `<div class="r ${k}"><span style="font-size:${t ? fit(t, RW, mx) : mx}mm">${t ? esc(t) : ''}</span></div>`;
   const tags = notifyTags(o.notify_methods);
@@ -62,7 +65,7 @@ function labelHtml(o, fills) {
   const dsz = fs.length >= 3 ? 3.7 : fs.length === 2 ? 5.2 : 6;
   const fl = fs.map(f => `<span><b>${SEQ_MARK[f.seq] || f.seq}</b>${mdOf(f.due_date)}</span>`).join('');
   return `<div class="lb">
-    <div class="hd"><div class="hl">${LOGO_MONO}<span class="cp">藥局聯</span></div><div class="nm" style="font-size:${fit(o.patient_name, 20.8, 5.6)}mm">${esc(o.patient_name)}</div></div>
+    <div class="hd"><div class="hl">${LOGO_MONO}<span class="cp">藥局聯</span></div><div class="nm" style="font-size:${fit(o.patient_name, 19.6, 5.6)}mm">${esc(o.patient_name)}</div></div>
     <div class="mid">
       <div class="qrw"><div class="qr">${qrSvg(o.order_no)}</div><div class="no">${esc(fmtNo(o.order_no))}</div></div>
       <div class="info">${info}</div>
@@ -89,7 +92,7 @@ function slipParts(o, mode = 'r57') {
       ${one(o.dept_name || '')}</div></div>`;
   const contact = `<div class="ct">${notifyTags(o.notify_methods)}<span class="ph">${o.phone ? esc(o.phone) : '&nbsp;'}</span></div>`;
   const meta = `<div class="meta"><span>${rocDT(o.created_at)}</span>${o.created_staff_code ? `<span>輸入人員：${esc(o.created_staff_code)}</span>` : ''}</div>`;
-  const msg = `<div class="msg">藥品準備完成後會通知您。<br>請於接到通知後10天內，攜帶<br>「健保卡」來藥局領藥！</div>
+  const msg = `<div class="msg">藥品準備完成後會通知您，<br>請於接到通知後10天內，<br>攜帶「健保卡」來藥局領藥！</div>
     <div class="tips"><div>☀ 建議收到通知後，再來藥局領藥。</div><div>☀ 領藥時出示本單據可加快現場作業。</div></div>`;
   const ft = storeSetting('receipt_footer', '');
   const footer = ft ? `<div class="ft">${esc(ft)}</div>` : '';
@@ -148,7 +151,7 @@ const SLIP = `
     .qr{width:var(--qr);height:var(--qr);flex:none}.qr svg{width:100%;height:100%;display:block}
     .it{min-width:0;font-size:var(--f3);line-height:1.45;font-weight:500}
     .it .no{font-family:Arial,sans-serif;font-weight:700}
-    .it .one{white-space:nowrap;overflow:hidden;text-overflow:clip}
+    .it .one{white-space:nowrap;overflow:hidden;text-overflow:clip;font-weight:700}
     hr{border:0;border-top:var(--b1) solid #000;margin:calc(var(--g) * 1.2) 0}
     .ct{display:flex;align-items:center;gap:calc(var(--g) * 1.2);flex-wrap:wrap;min-height:calc(var(--f2) * 1.6)}
     .tg{border:var(--b1) solid #000;border-radius:.2em;padding:0 .3em;font-size:var(--f2);font-weight:700;font-family:Arial,${FONT};line-height:1.3}
@@ -156,13 +159,13 @@ const SLIP = `
     .lbl{font-size:var(--f3);font-weight:900}
     .ds{margin-top:calc(var(--g) * .8)}
     .d{display:flex;align-items:center;gap:.3em;font-size:var(--fd);font-weight:500;font-family:Arial,"Helvetica Neue",sans-serif;line-height:1.3;padding:.04em .2em;margin:.06em 0;border-radius:.12em}
-    .d b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;font-size:.7em;line-height:1}
+    .d b{font-family:"Segoe UI Symbol","Microsoft JhengHei","Noto Sans Symbols 2","DejaVu Sans",sans-serif;font-weight:400;font-size:.86em;line-height:1}
     .d.hl{background:#000;color:#fff;font-weight:700}
     .lbl.nt{margin-top:calc(var(--g) * 1.2);display:flex;align-items:center;gap:.4em}
     .lbl.nt::after{content:"";flex:1;border-top:var(--b1) solid #000}
     .note{margin-top:calc(var(--g) * .5);font-size:var(--f2);font-weight:700;word-break:break-all;line-height:1.35}
-    .msg{margin-top:calc(var(--g) * 1.2);background:#000;color:#fff;text-align:center;font-size:var(--fm);white-space:nowrap;font-weight:900;line-height:1.45;padding:.5em .4em;border-radius:.35em}
-    .tips{margin-top:var(--g);font-size:var(--ft);font-weight:500;line-height:1.7;white-space:nowrap}
+    .msg{margin-top:calc(var(--g) * 1.2);background:#000;color:#fff;text-align:center;font-size:var(--fm);white-space:nowrap;font-weight:900;line-height:1.45;padding:.45em .2em;border-radius:.35em;letter-spacing:-.01em}
+    .tips{margin-top:var(--g);font-size:var(--ft);font-weight:700;line-height:1.7;white-space:nowrap}
     .ft{margin-top:calc(var(--g) * .6);font-size:var(--f4);font-weight:700}
     .pg:last-child{break-after:auto;page-break-after:auto}
     .meta{display:flex;align-items:baseline;gap:1.2em;font-size:var(--f4);font-family:Arial,${FONT}}`;
@@ -171,7 +174,7 @@ const CSS = {
   label: `@page{size:40mm 30mm;margin:0}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000}
-    .lb{width:40mm;height:30mm;padding:1mm 1.5mm .6mm;display:flex;flex-direction:column;break-after:page;page-break-after:always;overflow:hidden}
+    .lb{width:40mm;height:30mm;padding:1mm 2.8mm .6mm 1.3mm;display:flex;flex-direction:column;break-after:page;page-break-after:always;overflow:hidden}
     .lb:last-child{break-after:auto;page-break-after:auto}
     .hd{display:flex;align-items:center;gap:1.6mm;height:6.6mm;flex:none}
     .hd .hl{flex:none;width:13mm;margin-right:.4mm;display:flex;align-items:center;justify-content:space-between}
@@ -197,13 +200,13 @@ const CSS = {
   receipt: `@page{margin:0}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000;background:#fff}
-    .pg{--f1:17pt;--f2:12.5pt;--f3:10.5pt;--f4:8.5pt;--fd:20pt;--fm:9.3pt;--ft:7.6pt;--g:1.6mm;--b1:.3mm;--b2:.6mm;--lg:7.5mm;--qr:14mm;
+    .pg{--f1:17pt;--f2:12.5pt;--f3:10.5pt;--f4:8.5pt;--fd:20pt;--fm:9.6pt;--ft:7.4pt;--g:1.6mm;--b1:.3mm;--b2:.6mm;--lg:7.5mm;--qr:14mm;
       width:46mm;margin:0;padding:2mm 0 6mm 1mm;break-after:page;page-break-after:always}${SLIP}`,
   // A5：同一風格放大
   a5: `@page{size:A5;margin:9mm 10mm}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
     html,body{margin:0;padding:0;font-family:${FONT};color:#000;background:#fff}
-    .pg{--f1:24pt;--f2:15pt;--f3:12.5pt;--f4:10pt;--fd:24pt;--fm:13.5pt;--ft:10.5pt;--g:2.6mm;--b1:.4mm;--b2:.8mm;--lg:11mm;--qr:26mm;
+    .pg{--f1:24pt;--f2:15pt;--f3:12.5pt;--f4:10pt;--fd:24pt;--fm:17pt;--ft:10.5pt;--g:2.6mm;--b1:.4mm;--b2:.8mm;--lg:11mm;--qr:26mm;
       height:191mm;overflow:hidden;break-after:page;page-break-after:always}${SLIP}`,
 };
 
@@ -220,7 +223,7 @@ export function labelData(o, fills) {
 /** 4×3 貼紙優先送本機 RxBridge 列印（可指定印表機、不跳視窗）；RxBridge 沒開或失敗時改用瀏覽器列印 */
 async function printLabelViaBridge(o, fills, copies) {
   const u = bridgeUrl();
-  if (!u || !storeSetting('bridge_print', true)) return false;
+  if (!u || !getLabelBridge()) return false;
   try {
     const r = await fetch(u + '/print-label', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -231,7 +234,7 @@ async function printLabelViaBridge(o, fills, copies) {
     toast(`已送出貼紙列印（${j.printer || 'RxBridge'}）`, 'ok', 1500);
     return true;
   } catch (e) {
-    toast('RxBridge 列印失敗，改用瀏覽器列印：' + (e.message || e), 'warn', 3500);
+    toast('RxBridge 列印失敗，改用瀏覽器列印：' + (e.message || e) + '（這台電腦若不用 RxBridge 印貼紙，請到 店別設定 › 本機列印 關閉）', 'warn', 5000);
     return false;
   }
 }

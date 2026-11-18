@@ -3,7 +3,7 @@
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue';
 import { sb, state, q, rpc, toast, toastErr, loadStoreData, loadCommon, curStore, storeSetting, todayISO, addDays, DEFAULT_CANCEL_REASONS, shortHosp, useDirty } from '../lib.js';
 import { HospitalInput, DeptInput, NotifyPicker, TplInput, RocDate, SortableChips, PhraseEditor, UnsavedBar, loadPhraseList, savePhraseList } from '../components.js';
-import { PRINT_MODES, getPrintMode, setPrintMode, printOrder } from '../print.js';
+import { PRINT_MODES, getPrintMode, setPrintMode, printOrder, getLabelBridge, setLabelBridge } from '../print.js';
 
 const SECTIONS = [
   ['sec-default', '寄單預設值'], ['sec-quick', '常用醫院／科別'], ['sec-phrase', '常用片語'], ['sec-cancel', '取消原因'],
@@ -17,6 +17,8 @@ export default {
     // （「本機列印」是存在這台電腦的瀏覽器，選了就生效，不在此列）
     const printMode = ref(getPrintMode());
     watch(printMode, m => { setPrintMode(m); toast('本機列印格式已更新', 'ok', 1200); });
+    const labelBridge = ref(getLabelBridge());
+    watch(labelBridge, v => { setLabelBridge(v); toast(v ? '這台電腦的貼紙改由 RxBridge 列印' : '這台電腦的貼紙改用瀏覽器列印', 'ok', 1600); });
     const s = reactive({
       notify_template: '', receipt_footer: '', prep_days_ahead: 7, bridge_url: '', bridge_print: true,
       default_notify: [], default_hospital_code: '', default_hospital_name: '', default_dept_code: '', default_dept_name: '',
@@ -169,12 +171,12 @@ export default {
     function testPrint() {
       printOrder({ order_no: '26111300013', patient_name: '測試病人', phone: '0912345678', notify_methods: ['LINE'],
         hospital_code: state.quick[0]?.hospital_code, hospital_name: state.quick[0]?.name || '台北市立聯合醫院', dept_name: '心臟血管內科',
-        note: '列印測試', created_at: new Date().toISOString(), created_staff_name: '測試' },
+        note: '列印測試', created_at: new Date().toISOString(), created_staff_code: '00', created_staff_name: '測試' },
       [{ seq: 2, due_date: addDays(todayISO(), 7), status: 'pending' }, { seq: 3, due_date: addDays(todayISO(), 35), status: 'pending' }], printMode.value);
     }
     const jump = id => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-    return { state, s, quick, phr, addDept, newReason, bridgeTest, printMode, PRINT_MODES, SECTIONS, deptName, shortHosp,
+    return { labelBridge, state, s, quick, phr, addDept, newReason, bridgeTest, printMode, PRINT_MODES, SECTIONS, deptName, shortHosp,
       dirty, dirtyParts, busy, saveAll, discard, reorderDepts, removeDept, addReason, reorderReasons, removeReason,
       addQuick, delQuick, quickChanged, dragFrom, dragOver, dropQuick, testBridge, testPrint, jump, curStore };
   },
@@ -257,6 +259,8 @@ export default {
       <div class="sethead"><h3><i class="sl"></i>本機列印</h3><span class="hint">每台電腦各自設定（存在這台電腦的瀏覽器），選擇後立即生效</span></div>
       <div class="setrow"><label>列印格式</label><div class="inline" style="max-width:420px"><select class="inp" v-model="printMode"><option v-for="m in PRINT_MODES" :key="m.id" :value="m.id">{{m.name}}</option></select>
         <button class="btn" @click="testPrint">測試列印</button></div></div>
+      <div class="setrow"><label>貼紙列印方式</label><div><label class="ck"><input type="checkbox" v-model="labelBridge"> 這台電腦的 4×3 貼紙交給 RxBridge 直接列印（不跳列印視窗）</label>
+        <div class="hint">預設關閉＝用瀏覽器列印。勾選前請先在 RxBridge.ini 的 <code>LabelPrinter</code> 填好標籤機名稱，否則會印到 Windows 預設印表機；RxBridge 沒開時會自動改用瀏覽器列印。</div></div></div>
       <div class="setrow"><label>免跳出列印視窗</label><div class="hint">Chrome 捷徑的「目標」最後加上 <code>--kiosk-printing</code>，並把標籤機設為 Windows 預設印表機</div></div>
     </section>
 
@@ -264,8 +268,6 @@ export default {
       <div class="sethead"><h3><i class="sl"></i>藥局系統連線（RxBridge）</h3><span class="hint">沒有就留空</span></div>
       <div class="setrow"><label>連線網址</label><div class="inline" style="max-width:520px"><input class="inp" v-model="s.bridge_url" placeholder="http://localhost:5880"><button class="btn" @click="testBridge">測試連線</button></div></div>
       <div class="setrow"><label></label><div class="hint">{{bridgeTest || '福原藥局：在櫃台電腦執行 RxBridge 後填 http://localhost:5880，輸入姓名時即可查詢藥局系統病人資料。'}}</div></div>
-      <div class="setrow"><label>貼紙列印</label><div><label class="ck"><input type="checkbox" v-model="s.bridge_print"> 4×3 貼紙交給 RxBridge 直接列印（不跳列印視窗）</label>
-        <div class="hint">印表機在 RxBridge.ini 的 LabelPrinter 設定；RxBridge 沒開時會自動改用瀏覽器列印。</div></div></div>
     </section>
     <UnsavedBar :dirty="dirty" :busy="busy" :count="dirtyParts.length" @save="saveAll" @discard="discard" />
   </div>`,

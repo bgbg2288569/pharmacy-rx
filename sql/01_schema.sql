@@ -879,7 +879,9 @@ create table if not exists rx_api_keys (
   default_staff_name  text not null default '調劑系統',     -- 未帶人員代碼時的記錄名稱
   active              boolean not null default true,
   created_at          timestamptz not null default now(),
-  last_used_at        timestamptz
+  last_used_at        timestamptz,
+  key_plain           text,                                -- v1.21 完整金鑰（只能經 rx_api_key_reveal 由管理員查看）
+  has_plain           boolean generated always as (key_plain is not null) stored
 );
 alter table rx_api_keys enable row level security;
 drop policy if exists rx_api_keys_r on rx_api_keys;
@@ -895,10 +897,22 @@ begin
   if not rx_is_admin() then raise exception '只有系統管理員可以產生金鑰'; end if;
   if not exists (select 1 from rx_stores where id = p_store) then raise exception '找不到門市 %', p_store; end if;
   k := 'rxk_' || replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
-  insert into rx_api_keys (store_id, name, key_prefix, key_hash)
-  values (p_store, coalesce(nullif(trim(p_name), ''), '調劑電腦'), left(k, 10), encode(sha256(convert_to(k, 'UTF8')), 'hex'));
+  insert into rx_api_keys (store_id, name, key_prefix, key_hash, key_plain)
+  values (p_store, coalesce(nullif(trim(p_name), ''), '調劑電腦'), left(k, 10), encode(sha256(convert_to(k, 'UTF8')), 'hex'), k);
   return k;
 end $$;
+
+-- 管理員查看完整金鑰
+create or replace function rx_api_key_reveal(p_id bigint) returns text
+language plpgsql stable security definer set search_path = public as $$
+declare k text;
+begin
+  if not rx_is_admin() then raise exception '只有系統管理員可以查看金鑰'; end if;
+  select key_plain into k from rx_api_keys where id = p_id;
+  if k is null then raise exception '這組金鑰是舊版產生的，系統沒有保存完整內容；需要的話請重新產生一組'; end if;
+  return k;
+end $$;
+
 
 -- 日期：民國 1151114 / 115/11/14、西元 2026-11-14 / 20261114 → date；無法判讀回傳 null
 create or replace function rx_parse_date(t text) returns date
@@ -1122,7 +1136,7 @@ grant execute on function rx_create_order(jsonb, text), rx_update_order(bigint, 
   rx_dashboard(text, date, date, int), rx_update_store_settings(text, jsonb), rx_due_counts(text, date, date),
   rx_link_family(bigint, bigint, text), rx_unlink_family(bigint, text),
   rx_resolve_staff(text, text), rx_is_admin(), rx_is_member(), rx_my_store(), rx_can_store(text),
-  rx_luhn(text), rx_valid_order_no(text), rx_api_key_create(text, text)
+  rx_luhn(text), rx_valid_order_no(text), rx_api_key_create(text, text), rx_api_key_reveal(bigint)
 to authenticated;
 -- 調劑系統（anon key）只能呼叫 rx_intake，函式內部以門市 API 金鑰驗證
 grant execute on function rx_intake(text, jsonb, boolean) to anon, authenticated;
@@ -1143,6 +1157,10 @@ begin
 end $$;
 revoke insert, update, delete on rx_orders, rx_fills, rx_logs, rx_counters from authenticated;
 revoke insert, delete on rx_api_keys from authenticated;
+-- 金鑰表：欄位權限不開放 key_plain、key_hash；修改只能改名稱、啟用（v1.21）
+revoke select, update on rx_api_keys from authenticated;
+grant select (id, store_id, name, key_prefix, default_staff_name, active, created_at, last_used_at, has_plain) on rx_api_keys to authenticated;
+grant update (name, active) on rx_api_keys to authenticated;
 grant select on rx_fill_view to authenticated;
 
 -- 匯入用的暫存表（含病人資料）用完就刪掉

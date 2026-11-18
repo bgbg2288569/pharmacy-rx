@@ -13,7 +13,9 @@ const STATUS_OPTS = [
   { v: 'closed', t: '已完成', p: { order_status: 'closed' } },
   { v: 'cancelled', t: '已取消', p: { order_status: 'cancelled' } },
 ];
-const blank = () => ({ keyword: '', hospital: '', dept_code: '', dept_name: '', status: '', created_from: '', created_to: '', due_from: '', due_to: '', all_stores: false });
+// 預設只查領藥日在「今天往前 3 個月」以後的寄單（含未來的領藥日），減少查詢時間；要查更早的把領藥日「起」清掉即可
+const since3m = () => { const d = new Date(todayISO() + 'T00:00:00'); d.setMonth(d.getMonth() - 3); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+const blank = () => ({ keyword: '', hospital: '', dept_code: '', dept_name: '', status: '', created_from: '', created_to: '', due_from: since3m(), due_to: '', all_stores: false });
 
 export default {
   components: { RocDate, FillChip, NotifyPills, DeptInput },
@@ -47,7 +49,7 @@ export default {
         if (my === seq) { rows.value = r; searched.value = true; }
       } catch (e) { if (my === seq) toastErr(e); } finally { if (my === seq) loading.value = false; }
     }
-    // 沒有任何條件時列出全部（含已取消），依寄單時間由新到舊
+    // 預設列出領藥日近 3 個月起的全部寄單（含已取消），依寄單時間由新到舊
     watch(f, () => {
       clearTimeout(timer);
       timer = setTimeout(() => run(false), 350);
@@ -127,7 +129,7 @@ export default {
         <select class="inp" v-model="f.status"><option v-for="o in STATUS_OPTS" :key="o.v" :value="o.v">{{o.t}}</option></select></div>
       <div class="q rg1"><label class="lbl">寄單日</label>
         <div class="rg"><RocDate v-model="f.created_from" placeholder="起" compact /><span>～</span><RocDate v-model="f.created_to" placeholder="迄" compact /></div></div>
-      <div class="q rg2"><label class="lbl">領藥日</label>
+      <div class="q rg2"><label class="lbl">領藥日 <span class="opt">預設近 3 個月起；查更早請清掉「起」</span></label>
         <div class="rg"><RocDate v-model="f.due_from" placeholder="起" compact /><span>～</span><RocDate v-model="f.due_to" placeholder="迄" compact /></div></div>
       <div class="q bt">
         <label v-if="isAdmin()" class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" v-model="f.all_stores">全部門市</label>

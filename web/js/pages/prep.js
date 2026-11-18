@@ -16,7 +16,8 @@ export default {
     const ahead = () => Number(storeSetting('prep_days_ahead', 7));
     const range = reactive({ from: addDays(todayISO(), ahead()), to: addDays(todayISO(), ahead()) });
     const rows = ref([]);
-    const late = ref([]);                 // 今天以前仍未預作（提醒用）
+    const late = ref([]);                 // 漏預作：最新預作日（或昨天）以前仍未確認（提醒用）
+    const lateCut = ref('');
     const lastPrep = ref('');              // 目前最新預作日
     const days = ref([]);
     const tab = ref('todo');
@@ -33,14 +34,20 @@ export default {
       if (!state.storeId || !range.from) return;
       if (!range.to || range.to < range.from) range.to = range.from;
       try {
-        const [list, lt, dc] = await withBusy(Promise.all([
+        const [list, dc, st] = await withBusy(Promise.all([
           q(sb.from('rx_fill_view').select('*').eq('store_id', state.storeId).neq('order_status', 'cancelled').neq('fill_status', 'cancelled')
             .gte('due_date', range.from).lte('due_date', range.to).order('order_no').limit(1000)),
-          q(sb.from('rx_fill_view').select('fill_id,due_date').eq('store_id', state.storeId).neq('order_status', 'cancelled').eq('fill_status', 'pending')
-            .lt('due_date', todayISO()).gte('due_date', addDays(todayISO(), -60)).order('due_date').limit(300)),
           rpc('rx_due_counts', { p_store: state.storeId, p_from: todayISO(), p_to: addDays(todayISO(), DAYS - 1) }),
           q(sb.from('rx_stores').select('settings').eq('id', state.storeId).single()),
-        ]), '載入中…').then(r => { lastPrep.value = r[3]?.settings?.last_prep_date || ''; return r; });
+        ]), '載入中…');
+        lastPrep.value = st?.settings?.last_prep_date || '';
+        // 漏預作：領藥日在「最新預作日」（或昨天）以前，卻還沒確認的
+        // 常見原因：預作確認做完後，才又輸入一張領藥日更早的寄單
+        const yest = addDays(todayISO(), -1);
+        const cut = lastPrep.value && lastPrep.value > yest ? lastPrep.value : yest;
+        const lt = await q(sb.from('rx_fill_view').select('fill_id,due_date').eq('store_id', state.storeId).neq('order_status', 'cancelled').eq('fill_status', 'pending')
+          .lte('due_date', cut).gte('due_date', addDays(todayISO(), -60)).order('due_date').limit(300));
+        lateCut.value = cut;
         rows.value = list; late.value = lt;
         const m = Object.fromEntries(dc.map(d => [d.due_date, d]));
         days.value = Array.from({ length: DAYS }, (_, i) => { const d = addDays(todayISO(), i); return { d, total: m[d]?.total || 0, pending: m[d]?.pending || 0 }; });
@@ -65,7 +72,8 @@ export default {
     function onScanInput(e) { const v = e.target.value.replace(/[^\d-]/g, ''); if (v !== e.target.value) e.target.value = v; scan.value = v; }
     function focusScan() { nextTick(() => scanEl.value?.focus()); }
     function setDay(d) { range.from = d; range.to = d; tab.value = 'todo'; focusScan(); }
-    function showLate() { if (!late.value.length) return; range.from = late.value[0].due_date; range.to = addDays(todayISO(), -1); tab.value = 'todo'; }
+    function showLate() { if (!late.value.length) return; range.from = late.value[0].due_date; range.to = late.value[late.value.length - 1].due_date; tab.value = 'todo'; }
+    const lateNew = computed(() => late.value.filter(x => x.due_date >= todayISO()).length);   // 今天以後的（預作後才補進來的）
     const allDone = computed(() => rows.value.length > 0 && todo.value.length === 0);
     function show(kind, title, sub = '') { msg.value = { kind, title, sub }; }
     function pushRecent(text, kind) { recent.value.unshift({ t: new Date(), text, kind }); recent.value = recent.value.slice(0, 30); }
@@ -193,7 +201,7 @@ export default {
       ], todo.value);
     }
     const open = id => { state.detailId = id; };
-    return { alarm, ignored, dismissAlarm, alarmForce, state, range, rows, late, lastPrep, showLate, allDone, days, tab, scan, scanEl, msg, pendingConfirm, flashId, recent, sortKey, kw, done, todo, shown, pct, shortHosp, fullOf, timeOf,
+    return { lateCut, lateNew, alarm, ignored, dismissAlarm, alarmForce, state, range, rows, late, lastPrep, showLate, allDone, days, tab, scan, scanEl, msg, pendingConfirm, flashId, recent, sortKey, kw, done, todo, shown, pct, shortHosp, fullOf, timeOf,
       setDay, onScan, onScanInput, forceConfirm, toggle, switchOp, printTodo, open, focusScan, rocOf, mdOf, weekOf, fmtNo, dtOf, todayISO, CIRCLED };
   },
   template: `<div class="wrap">
@@ -208,9 +216,13 @@ export default {
     <div class="card">
       <div class="chips" style="margin-bottom:12px;align-items:center">
         <span class="small muted" style="margin-right:4px">領藥日<span class="tiny">（待預作／總數）</span></span>
-        <button v-if="late.length" class="chip latechip" @click="showLate" title="今天以前仍未預作的寄單">⚠ 過期未預作 <span class="k">{{late.length}}</span></button>
+        <button v-if="late.length" class="chip latechip" @click="showLate" title="領藥日在最新預作日以前，卻還沒確認的寄單">⚠ 漏預作 <span class="k">{{late.length}}</span></button>
         <button v-for="x in days" :key="x.d" class="chip" :class="{on: range.from===x.d && range.to===x.d, alldone: x.total>0 && x.pending===0}" @click="setDay(x.d)">
           {{mdOf(x.d)}}({{weekOf(x.d)}}) <span class="k">{{ x.total>0 && x.pending===0 ? '✓ ' + x.total : x.pending + '/' + x.total }}</span></button>
+      </div>
+      <div class="latebar" v-if="late.length" @click="showLate">
+        <span><b>⚠ 有 {{late.length}} 筆漏預作：</b>領藥日在 {{fullOf(lateCut)}} 以前，還沒有預作確認<template v-if="lateNew">（其中 {{lateNew}} 筆領藥日在今天以後，可能是預作確認完成後才輸入的寄單）</template></span>
+        <span class="sp"></span><span class="go">點此查看 ›</span>
       </div>
       <div class="form" style="align-items:end">
         <div class="fld c3"><label>領藥日 起</label><RocDate v-model="range.from" compact /></div>
@@ -262,12 +274,12 @@ export default {
                 <span class="bdt" v-if="r.birth_date">{{fullOf(r.birth_date)}}</span></td>
               <td class="nw"><span class="sq" :class="'sq'+r.seq">{{r.seq}}</span> 第{{r.seq}}次<span class="last" v-if="r.max_seq===r.seq" title="這張處方的最後一次">末次</span></td>
               <td class="nw num small">{{rocOf(r.due_date)}}({{weekOf(r.due_date)}})</td>
-              <td class="small ell" style="max-width:150px" :title="r.hospital_name"><b>{{shortHosp(r.hospital_code, r.hospital_name)}}</b></td>
-              <td class="small ell" style="max-width:120px" :title="r.dept_name">{{r.dept_name}}</td>
+              <td class="small" :title="r.hospital_name"><div class="ell" style="max-width:150px"><b>{{shortHosp(r.hospital_code, r.hospital_name)}}</b></div></td>
+              <td class="small" :title="r.dept_name"><div class="ell" style="max-width:110px">{{r.dept_name}}</div></td>
               <td><NotifyPills :list="r.notify_methods" /></td>
               <td class="nw num tiny muted">{{fmtNo(r.order_no)}}</td>
-              <td class="small ell" style="max-width:200px" :title="r.note">{{r.note}}</td>
-              <td><button class="btn xs" @click.stop="open(r.order_id)">明細</button></td>
+              <td class="small" :title="r.note"><div class="clamp2">{{r.note}}</div></td>
+              <td class="actcol"><button class="btn xs" @click.stop="open(r.order_id)">明細</button></td>
             </tr>
             <tr class="empty-row" v-if="!shown.length"><td colspan="10">{{ kw ? '找不到「'+kw+'」' : tab==='todo' && rows.length ? '🎉 全部確認完成' : '沒有資料' }}</td></tr>
           </tbody>

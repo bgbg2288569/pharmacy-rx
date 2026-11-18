@@ -132,7 +132,7 @@ const App = {
       state.dirty = {};                              // 逾時登出不再詢問未儲存變更
       await localSignOut();
       clearSession();
-      state.authMsg = '已閒置超過 4 小時，系統已自動登出，請重新登入。';
+      state.authMsg = '閒置超過 4 小時，已自動登出，請重新登入。';
     }
     const checkIdle = () => { if (state.user && idleExpired()) idleLogout(); };
     // 等待最多 ms 毫秒，逾時就放棄（避免網路或登入狀態異常時畫面一直停在「載入中」）
@@ -154,7 +154,7 @@ const App = {
         const session = res?.data?.session;
         if (session && idleExpired()) {              // 上次操作已超過 4 小時：直接登出，不自動登入
           await localSignOut();
-          state.authMsg = '已閒置超過 4 小時，系統已自動登出，請重新登入。';
+          state.authMsg = '閒置超過 4 小時，已自動登出，請重新登入。';
         } else if (session) { markActive(); await withTimeout(afterLogin(session.user), 15000); }
       } finally {
         state.ready = true;                          // 無論如何都要離開「載入中」

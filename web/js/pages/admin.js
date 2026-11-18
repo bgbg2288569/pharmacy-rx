@@ -178,8 +178,16 @@ export default {
     const nk = reactive({ store_id: '', name: '' });
     const newKey = ref(null);           // { key, store, name } 只顯示這一次
     async function loadKeys() {
-      try { keys.value = await q(sb.from('rx_api_keys').select('*').order('store_id').order('created_at')); } catch (e) { toastErr(e); }
+      try { keys.value = await q(sb.from('rx_api_keys').select('id,store_id,name,key_prefix,active,created_at,last_used_at,has_plain').order('store_id').order('created_at')); } catch (e) { toastErr(e); }
     }
+    // 金鑰清單預設收起；展開後每組金鑰按「顯示」才向伺服器取完整金鑰（只有系統管理員可以）
+    const showKeys = ref(false);
+    const revealed = reactive({});
+    async function revealKey(k) {
+      if (revealed[k.id]) { delete revealed[k.id]; return; }
+      try { revealed[k.id] = await rpc('rx_api_key_reveal', { p_id: k.id }); } catch (e) { toastErr(e); }
+    }
+    watch(showKeys, v => { if (!v) for (const id of Object.keys(revealed)) delete revealed[id]; });
     async function createKey() {
       if (!nk.store_id) return toast('請選擇門市', 'err');
       try {
@@ -196,7 +204,7 @@ export default {
     watch(tab, t => { if (t === 'apikeys') loadKeys(); });
     onMounted(() => { loadGs(); loadUsers(); loadPhr(); });
 
-    return { keys, nk, newKey, createKey, toggleKey, apiBase, CONFIG, copyText, dtOf, switchTab, usersDirty, phr, aDirtyCount, aBusy, saveAdmin, discardAdmin, state, tab, storeOpts, staffStoreOpts, hq, hKey, setHq, hospQuery, reloadAll, nu, showPw, users, uBusy, pw, uDirty,
+    return { showKeys, revealed, revealKey, keys, nk, newKey, createKey, toggleKey, apiBase, CONFIG, copyText, dtOf, switchTab, usersDirty, phr, aDirtyCount, aBusy, saveAdmin, discardAdmin, state, tab, storeOpts, staffStoreOpts, hq, hKey, setHq, hospQuery, reloadAll, nu, showPw, users, uBusy, pw, uDirty,
       createUser, toggleActive, openPw, submitPw, loadUsers, storeName, gs, saveGs };
   },
   template: `<div class="wrap">
@@ -322,13 +330,22 @@ export default {
         </div>
       </div>
       <div class="card">
-        <div class="btns" style="margin-bottom:8px"><h3 style="margin:0"><i class="sl"></i>金鑰清單</h3></div>
-        <div class="tbl"><table>
-          <thead><tr><th style="width:140px">門市</th><th>名稱</th><th style="width:150px">金鑰開頭</th><th style="width:150px">建立</th><th style="width:150px">最後使用</th><th style="width:80px">狀態</th><th style="width:90px"></th></tr></thead>
+        <div class="btns"><h3 style="margin:0"><i class="sl"></i>金鑰清單</h3><span class="small muted">共 {{keys.length}} 組（啟用 {{keys.filter(k => k.active).length}}）</span>
+          <span style="flex:1"></span>
+          <button class="btn sm" @click="showKeys = !showKeys">{{ showKeys ? '隱藏金鑰清單' : '顯示金鑰清單' }}</button></div>
+        <div class="tbl" v-if="showKeys" style="margin-top:10px"><table>
+          <thead><tr><th style="width:150px">門市</th><th style="width:170px">名稱</th><th>金鑰</th><th style="width:140px">建立</th><th style="width:140px">最後使用</th><th style="width:70px">狀態</th><th style="width:70px"></th></tr></thead>
           <tbody>
             <tr v-for="k in keys" :key="k.id" style="cursor:default" :class="{done: !k.active}">
-              <td>{{k.store_id}} {{storeName(k.store_id)}}</td><td>{{k.name}}</td><td class="num">{{k.key_prefix}}…</td>
-              <td class="num small">{{dtOf(k.created_at)}}</td><td class="num small">{{k.last_used_at ? dtOf(k.last_used_at) : '—'}}</td>
+              <td class="nw">{{k.store_id}} {{storeName(k.store_id)}}</td><td>{{k.name}}</td>
+              <td>
+                <div class="keycell" v-if="revealed[k.id]"><code class="keybox">{{revealed[k.id]}}</code>
+                  <button class="btn xs" @click="copyText(revealed[k.id])">複製</button><button class="btn xs ghost" @click="revealKey(k)">隱藏</button></div>
+                <div class="keycell" v-else><span class="num">{{k.key_prefix}}••••••••</span>
+                  <button class="btn xs" v-if="k.has_plain" @click="revealKey(k)">顯示</button>
+                  <span class="tiny muted" v-else title="v1.21 以前產生的金鑰只保存雜湊值">舊版金鑰，無法顯示（需要請重新產生）</span></div>
+              </td>
+              <td class="num small nw">{{dtOf(k.created_at)}}</td><td class="num small nw">{{k.last_used_at ? dtOf(k.last_used_at) : '—'}}</td>
               <td><span class="pill" :class="k.active ? 'notified' : 'cancelled'">{{k.active ? '啟用' : '停用'}}</span></td>
               <td><button class="btn xs" :class="k.active ? 'danger' : ''" @click="toggleKey(k)">{{k.active ? '停用' : '啟用'}}</button></td>
             </tr>
@@ -338,12 +355,12 @@ export default {
       </div>
       <div class="card">
         <h3><i class="sl"></i>調劑輸出程式設定值</h3>
-        <table class="kv small">
-          <tr><td>API 網址</td><td><code>{{apiBase}}</code> <button class="btn xs" @click="copyText(apiBase)">複製</button></td></tr>
-          <tr><td>apikey（anon key）</td><td><code class="ell" style="max-width:520px;display:inline-block;vertical-align:bottom">{{CONFIG.SUPABASE_ANON_KEY}}</code> <button class="btn xs" @click="copyText(CONFIG.SUPABASE_ANON_KEY)">複製</button></td></tr>
-          <tr><td>門市 API 金鑰</td><td>上方產生的 rxk_ 開頭金鑰</td></tr>
-        </table>
-        <p class="small muted" style="margin-top:8px">anon key 本來就公開在網頁裡，真正的權限由門市 API 金鑰控管；金鑰外洩時在上方停用後重新產生即可。</p>
+        <div class="cfgrows">
+          <div class="cfgrow"><div class="k">API 網址</div><code class="v">{{apiBase}}</code><button class="btn xs" @click="copyText(apiBase)">複製</button></div>
+          <div class="cfgrow"><div class="k">apikey<span class="tiny muted">（anon key）</span></div><code class="v" :title="CONFIG.SUPABASE_ANON_KEY">{{CONFIG.SUPABASE_ANON_KEY}}</code><button class="btn xs" @click="copyText(CONFIG.SUPABASE_ANON_KEY)">複製</button></div>
+          <div class="cfgrow"><div class="k">門市 API 金鑰</div><div class="v plain">金鑰清單中 rxk_ 開頭的金鑰（每台調劑電腦一組）</div><span></span></div>
+        </div>
+        <p class="small muted" style="margin:10px 0 0">anon key 本來就公開在網頁裡，真正的權限由門市 API 金鑰控管；金鑰外洩時在上方停用後重新產生即可。</p>
       </div>
     </template>
 
